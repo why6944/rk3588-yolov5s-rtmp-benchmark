@@ -24,7 +24,14 @@
 #include "im2d.h"
 #include "RgaUtils.h"
 
-void BGR_to_NV12_with_RGA(uint8_t *bgr, uint8_t *nv12, int width, int height, int channels) {
+#define ALIGN(x, a)         (((x)+(a)-1)&~((a)-1))
+
+int g_width = 0;
+int g_height = 0;
+int g_hor_stride = 0;
+int g_ver_stride = 0;
+
+void BGR_to_NV12_with_RGA(uint8_t *bgr, uint8_t *nv12, int width, int height) {
     printf("开始BGR到NV12的转换，图像尺寸: %dx%d\n", width, height);
     rga_buffer_handle_t bgr_handle, yuv_handle;
 
@@ -32,7 +39,7 @@ void BGR_to_NV12_with_RGA(uint8_t *bgr, uint8_t *nv12, int width, int height, in
 
     // 导入缓冲区
     bgr_handle = importbuffer_virtualaddr(bgr, width * height * 3);
-    yuv_handle = importbuffer_virtualaddr(nv12, width * height * 3 / 2);
+    yuv_handle = importbuffer_virtualaddr(nv12, g_hor_stride * g_ver_stride * 3 / 2);
 
     if(bgr_handle == 0 || yuv_handle == 0)
     {
@@ -40,8 +47,8 @@ void BGR_to_NV12_with_RGA(uint8_t *bgr, uint8_t *nv12, int width, int height, in
     }
 
     // 定义rga缓冲区
-    rga_buffer_t bgr_src = wrapbuffer_handle(bgr_handle, width, height, RK_FORMAT_BGR_888);
-    rga_buffer_t yuv_src = wrapbuffer_handle(yuv_handle, width, height, RK_FORMAT_YCrCb_420_SP);
+    rga_buffer_t bgr_src = wrapbuffer_handle(bgr_handle, width, height, RK_FORMAT_RGB_888);
+    rga_buffer_t yuv_src = wrapbuffer_handle(yuv_handle, g_hor_stride, g_ver_stride, RK_FORMAT_YCrCb_420_SP);
     
     // 执行转换
     int ret = imcheck(bgr_src, yuv_src, {}, {});
@@ -50,7 +57,7 @@ void BGR_to_NV12_with_RGA(uint8_t *bgr, uint8_t *nv12, int width, int height, in
         printf("%d, imcheck error! %s\n", __LINE__,  imStrError((IM_STATUS)ret));
     }
     
-    ret = imcvtcolor(bgr_src, yuv_src, RK_FORMAT_BGR_888, RK_FORMAT_YCrCb_420_SP);
+    ret = imcvtcolor(bgr_src, yuv_src, RK_FORMAT_RGB_888, RK_FORMAT_YCrCb_420_SP);
     if(ret == IM_STATUS_SUCCESS)
     {
         printf("BGR888 TO NV12 OK!\n");
@@ -70,6 +77,7 @@ void BGR_to_NV12_with_RGA(uint8_t *bgr, uint8_t *nv12, int width, int height, in
     }
 
 }
+
 
 // 在函数外部或文件开头添加一个常量定义
 const int MAX_CONCURRENT_FRAMES = 10; // 最大并发处理帧数，根据实际系统内存调整
@@ -199,16 +207,15 @@ void aggregatorThreadFunc(ThreadPoll &npu_pool)
     std::cerr << "[AggregatorThread] finished.\n";
 }
 
+
+uint8_t *nv12_buffer = nullptr;
 //-----------------------------------
 // 4) 写线程：从 g_writeQueue 中取出图像写到文件
 //-----------------------------------
 void writeThreadFunc(cv::VideoWriter &writer)
 {
     // 使用智能指针管理内存
-    std::unique_ptr<uint8_t[]> nv12_buffer;
-    int width = 0;
-    int height = 0;
-    bool buffer_initialized = false;
+    nv12_buffer = (uint8_t *)malloc(g_hor_stride * g_ver_stride * 3 / 2);
 
     while(true)
     {
@@ -231,29 +238,18 @@ void writeThreadFunc(cv::VideoWriter &writer)
             int current_width = outputFD.frame.cols;
             int current_height = outputFD.frame.rows;
             int channels = outputFD.frame.channels();
-            int nv12_size = current_width * current_height * 3 / 2;
 
-            // 如果是第一次处理或尺寸发生变化，重新分配缓冲区
-            if (!buffer_initialized || width != current_width || height != current_height) {
-                try {
-                    nv12_buffer = std::make_unique<uint8_t[]>(nv12_size);
-                    width = current_width;
-                    height = current_height;
-                    buffer_initialized = true;
-                } catch (const std::bad_alloc& e) {
-                    std::cerr << "内存分配失败: " << e.what() << std::endl;
-                    break;
-                }
-            }
+            int nv12_size = g_hor_stride * g_ver_stride * 3 / 2;
 
             // 使用RGA进行BGR到NV12的转换
-            BGR_to_NV12_with_RGA(outputFD.frame.data, nv12_buffer.get(), width, height, channels);
+            BGR_to_NV12_with_RGA(outputFD.frame.data, nv12_buffer, current_width, current_height);
             
             // 使用NV12数据进行处理
-            process_frame(nv12_buffer.get(), nv12_size);
+            process_frame(nv12_buffer, nv12_size);
         }
         cout<<"写入队列帧数："<<g_writeQueue.size()<<endl;
     }
+    free(nv12_buffer);
     std::cerr << "[WriteThread] finished.\n";
 }
 
@@ -282,6 +278,15 @@ int main()
     // 获取视频属性
     int width  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
     int height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+
+
+    int hor_stride = ALIGN(width, 16);
+    int ver_stride = ALIGN(height, 16);
+
+    g_width = width;
+    g_height = height;
+    g_hor_stride = hor_stride;
+    g_ver_stride = ver_stride;
 
     double fps = cap.get(cv::CAP_PROP_FPS);
     if(fps < 1.0)  // 避免某些视频元数据不完整

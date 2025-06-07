@@ -2,8 +2,9 @@
 cmake_minimum_required(VERSION 3.5)
 # 定义项目名称为 cv。CMake 将使用这个名称来创建相关构建目录和变量。
 project(cv)
-# 设置编译器标准为 C++11。这将确保代码在 C++11 标准下进行编译。
-set(CMAKE_CXX_STANDARD 11)
+# 设置编译器标准为 C++14。这将确保代码在 C++14 标准下进行编译。
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 输出系统的基本信息，包括系统名称和版本号，便于调试和确认构建环境。
 message(STATUS "System: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}")
 # 查找并引入 OpenCV 库。如果找不到，将会给出错误提示。
