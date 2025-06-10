@@ -9,6 +9,32 @@
  * 3. 编码器头信息的获取
  * 4. 资源的分配和释放
  */
+//============================================使用模板============================================
+    // //分配
+    // mpp_ctx = alloc_mpp_context();
+    // // 配置MPP编码器参数
+    // mpp_ctx->width = width;
+    // mpp_ctx->height = height;
+
+    // mpp_ctx->fps_in_flex = 0;  // 使用固定帧率模式
+    // mpp_ctx->fps_in_num = fps;
+    // mpp_ctx->fps_in_den = 1;
+
+    // mpp_ctx->fps_in_flex = 0;  // 使用固定帧率模式
+    // mpp_ctx->fps_out_num = fps;
+    // mpp_ctx->fps_out_den = 1;
+    
+    // mpp_ctx->bps = bitrate;
+    // mpp_ctx->gop_len = fps * 2;  // GOP长度为帧率的2倍
+    // mpp_ctx->write_frame = write_frame;
+    // mpp_ctx->type = MPP_VIDEO_CodingAVC;  // 设置H.264编码
+    // mpp_ctx->fmt = MPP_FMT_YUV420SP;  // 设置YUV420P格式
+    // mpp_ctx->rc_mode = MPP_ENC_RC_MODE_CBR;
+
+    // // 初始化MPP
+    // mpp_ctx->init_mpp(mpp_ctx);
+    
+//============================================使用模板============================================
 
 #include "mpp.h"
 
