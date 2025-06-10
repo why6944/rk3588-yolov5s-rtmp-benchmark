@@ -57,23 +57,28 @@ typedef struct {
         uint32_t size;
 } SpsHeader;
 
+/**
+ * @brief MPP编码器上下文结构体
+ * 
+ * 该结构体包含了MPP编码器运行所需的所有参数和状态信息
+ */
 typedef struct {
-        // base flow context
-        MppCtx ctx;
-        MppApi *mpi;
-        RK_S32 chn;
+        // 基础MPP上下文
+        MppCtx ctx;          ///< MPP上下文句柄
+        MppApi *mpi;         ///< MPP API接口指针
+        RK_S32 chn;          ///< 通道号
 
-        // global flow control flag
-        RK_U32 frm_eos;
-        RK_U32 pkt_eos;
-        RK_U32 frm_pkt_cnt;
-        RK_S32 frame_num;
-        RK_S32 frame_count;
-        RK_U64 stream_size;
-        volatile RK_U32 loop_end;
+        // 全局流程控制标志
+        RK_U32 frm_eos;      ///< 帧结束标志
+        RK_U32 pkt_eos;      ///< 包结束标志
+        RK_U32 frm_pkt_cnt;  ///< 当前帧的包计数
+        RK_S32 frame_num;    ///< 需要编码的总帧数
+        RK_S32 frame_count;  ///< 已编码的帧数
+        RK_U64 stream_size;  ///< 已编码的流大小
+        volatile RK_U32 loop_end;  ///< 循环结束标志
 
-        // encoder config set
-        MppEncCfg       cfg;
+        // 编码器配置
+        MppEncCfg cfg;       ///< 编码器配置
         MppEncPrepCfg   prep_cfg;
         MppEncRcCfg     rc_cfg;
         MppEncCodecCfg  codec_cfg;
@@ -83,42 +88,42 @@ typedef struct {
         MppEncOSDData   osd_data;
         MppEncROICfg    roi_cfg;
 
-        // input / output
-        MppBufferGroup buf_grp;
-        MppBuffer frm_buf;
-        MppBuffer pkt_buf;
+        // 输入/输出缓冲区
+        MppBufferGroup buf_grp;  ///< 缓冲区组
+        MppBuffer frm_buf;       ///< 帧缓冲区
+        MppBuffer pkt_buf;       ///< 包缓冲区
         MppBuffer md_info;
-        MppEncSeiMode sei_mode;
+        MppEncSeiMode sei_mode;  ///< SEI模式
         MppEncHeaderMode header_mode;
 
-        // paramter for resource malloc
-        RK_U32 width;
-        RK_U32 height;
-        RK_U32 hor_stride;
-        RK_U32 ver_stride;
-        MppFrameFormat fmt;
-        MppCodingType type;
+        // 资源分配参数
+        RK_U32 width;           ///< 图像宽度
+        RK_U32 height;          ///< 图像高度
+        RK_U32 hor_stride;      ///< 水平步长
+        RK_U32 ver_stride;      ///< 垂直步长
+        MppFrameFormat fmt;     ///< 帧格式
+        MppCodingType type;     ///< 编码类型
         RK_S32 loop_times;
 
-        // resources
-        size_t header_size;
-        size_t frame_size;
+        // 资源大小
+        size_t header_size;     ///< 头信息大小
+        size_t frame_size;      ///< 帧大小
         size_t mdinfo_size;
-        size_t packet_size;
+        size_t packet_size;     ///< 包大小
 
-        // rate control runtime parameter
-        RK_S32 fps_in_flex;
-        RK_S32 fps_in_den;
-        RK_S32 fps_in_num;
-        RK_S32 fps_out_flex;
-        RK_S32 fps_out_den;
-        RK_S32 fps_out_num;
-        RK_S32 bps;
-        RK_S32 bps_max;
-        RK_S32 bps_min;
-        RK_S32 rc_mode;
+        // 码率控制参数
+        RK_S32 fps_in_flex;     ///< 输入帧率灵活模式
+        RK_S32 fps_in_den;      ///< 输入帧率分母
+        RK_S32 fps_in_num;      ///< 输入帧率分子
+        RK_S32 fps_out_flex;    ///< 输出帧率灵活模式
+        RK_S32 fps_out_den;     ///< 输出帧率分母
+        RK_S32 fps_out_num;     ///< 输出帧率分子
+        RK_S32 bps;             ///< 目标码率
+        RK_S32 bps_max;         ///< 最大码率
+        RK_S32 bps_min;         ///< 最小码率
+        RK_S32 rc_mode;         ///< 码率控制模式
         RK_S32 gop_mode;
-        RK_S32 gop_len;
+        RK_S32 gop_len;         ///< GOP长度
         RK_S32 vi_len;
         RK_S32 scene_mode;
         RK_S32 cu_qp_delta_depth;
@@ -128,16 +133,15 @@ typedef struct {
         RK_S32 atl_str;
         RK_S32 sao_str_i;
         RK_S32 sao_str_p;
-        RK_S64 first_frm;
-        RK_S64 first_pkt;
+        RK_S64 first_frm;       ///< 第一帧时间戳
+        RK_S64 first_pkt;       ///< 第一个包时间戳
 
-        //call back function
-        int (*write_frame)(uint8_t*data,int size);
-        //function pointer
-        int (*init_mpp)(void *mpp_enc_data);
-        _Bool (*process_image)(uint8_t *p, int size,void *mpp_enc_data);
-        _Bool (*write_header)(void *mpp_enc_data,SpsHeader *sps_header);
-        void (*close)(void* ctx);
+        // 回调函数
+        int (*write_frame)(uint8_t*data,int size);  ///< 写入编码后帧数据的回调函数
+        int (*init_mpp)(void *mpp_enc_data);        ///< 初始化MPP的回调函数
+        _Bool (*process_image)(uint8_t *p, int size,void *mpp_enc_data);  ///< 处理图像的回调函数
+        _Bool (*get_header)(void *mpp_enc_data,SpsHeader *sps_header);  ///< 获取头信息的回调函数
+        void (*close)(void* ctx);                   ///< 关闭MPP的回调函数
 
 } MppContext;
 

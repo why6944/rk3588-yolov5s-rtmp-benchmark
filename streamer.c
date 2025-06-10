@@ -27,10 +27,15 @@ int init_streamer(int width, int height, int fps, int bitrate, const char *rtmp_
     // 配置MPP编码器参数
     g_streamer_ctx.mpp_ctx->width = width;
     g_streamer_ctx.mpp_ctx->height = height;
+
+    g_streamer_ctx.mpp_ctx->fps_in_flex = 0;  // 使用固定帧率模式
     g_streamer_ctx.mpp_ctx->fps_in_num = fps;
     g_streamer_ctx.mpp_ctx->fps_in_den = 1;
+
+    g_streamer_ctx.mpp_ctx->fps_in_flex = 0;  // 使用固定帧率模式
     g_streamer_ctx.mpp_ctx->fps_out_num = fps;
     g_streamer_ctx.mpp_ctx->fps_out_den = 1;
+    
     g_streamer_ctx.mpp_ctx->bps = bitrate;
     g_streamer_ctx.mpp_ctx->gop_len = fps * 2;  // GOP长度为帧率的2倍
     g_streamer_ctx.mpp_ctx->write_frame = write_frame;
@@ -54,7 +59,7 @@ int init_streamer(int width, int height, int fps, int bitrate, const char *rtmp_
     }
 
     // 获取SPS/PPS信息
-    if (!g_streamer_ctx.mpp_ctx->write_header(g_streamer_ctx.mpp_ctx, &g_streamer_ctx.sps_header)) {
+    if (!g_streamer_ctx.mpp_ctx->get_header(g_streamer_ctx.mpp_ctx, &g_streamer_ctx.sps_header)) {
         printf("Failed to get SPS/PPS header\n");
         return -1;
     }
