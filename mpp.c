@@ -420,7 +420,7 @@ static _Bool get_header(MppContext *mpp_enc_data, SpsHeader *sps_header)
         printf("开始获取编码器header信息成功\n");
     }
 
-    return true;
+    return 1;
 }
 
 /**
@@ -499,8 +499,8 @@ static _Bool process_image(uint8_t *p, int size, MppContext *mpp_enc_data)
             RK_S32 log_len = 0;
 
             // 记录第一帧的时间戳
-            if (!mpp_enc_data->first_pkt)
-                mpp_enc_data->first_pkt = mpp_time();
+            // if (!mpp_enc_data->first_pkt)
+            //     mpp_enc_data->first_pkt = mpp_time();
 
             mpp_enc_data->pkt_eos = mpp_packet_get_eos(packet);
 

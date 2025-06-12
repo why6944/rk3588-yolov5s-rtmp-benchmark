@@ -6,6 +6,7 @@
 
 typedef struct {
     MppContext *mpp_ctx;
+    RtmpContext *rtmp_ctx;
     SpsHeader sps_header;
     int is_initialized;
 } StreamerContext;
@@ -63,10 +64,24 @@ int init_streamer(int width, int height, int fps, int bitrate, const char *rtmp_
         printf("Failed to get SPS/PPS header\n");
         return -1;
     }
+    
+
+    g_streamer_ctx.rtmp_ctx = (RtmpContext *)malloc(sizeof(RtmpContext));
+
+    g_streamer_ctx.rtmp_ctx->codec_id = AV_CODEC_ID_H264;
+    g_streamer_ctx.rtmp_ctx->pix_fmt = AV_PIX_FMT_NV12;  // YUV420P格式
+    g_streamer_ctx.rtmp_ctx->width = width;
+    g_streamer_ctx.rtmp_ctx->height = height;
+    g_streamer_ctx.rtmp_ctx->fps = fps;
+    g_streamer_ctx.rtmp_ctx->max_b_frames = 0;  // 禁用B帧
+    g_streamer_ctx.rtmp_ctx->profile = FF_PROFILE_H264_HIGH;  // 设置H.264 profile
+    g_streamer_ctx.rtmp_ctx->level = 31;  // 设置H.264 level
+    g_streamer_ctx.rtmp_ctx->extradata = g_streamer_ctx.sps_header.data;
+    g_streamer_ctx.rtmp_ctx->extradata_size = g_streamer_ctx.sps_header.size;
 
     printf("初始化RTMP...\n");
     // 初始化RTMP
-    if (init_rtmp_streamer((char*)rtmp_url, g_streamer_ctx.sps_header.data, g_streamer_ctx.sps_header.size) < 0) {
+    if (init_rtmp_streamer((char*)rtmp_url, g_streamer_ctx.rtmp_ctx) < 0) {
         printf("Failed to initialize RTMP streamer\n");
         return -1;
     }
@@ -103,6 +118,12 @@ void close_streamer() {
     if (g_streamer_ctx.sps_header.data) {
         free(g_streamer_ctx.sps_header.data);
         g_streamer_ctx.sps_header.data = NULL;
+    }
+    
+    // 释放rtmp_ctx内存
+    if (g_streamer_ctx.rtmp_ctx) {
+        free(g_streamer_ctx.rtmp_ctx);
+        g_streamer_ctx.rtmp_ctx = NULL;
     }
     
     g_streamer_ctx.is_initialized = 0;

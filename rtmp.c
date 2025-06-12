@@ -39,11 +39,17 @@ int write_frame(uint8_t*data,int size)
         return 0;
 }
 
-int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
+/**
+ * 初始化RTMP流媒体推送器
+ * @param stream RTMP服务器地址
+ * @param config RTMPStreamerConfig结构体，包含SPS/PPS数据和其他参数
+ * @return 成功返回0，失败返回-1
+ */
+int init_rtmp_streamer(char* stream, RtmpContext *config)
 {       
         printf("开始初始化RTMP流媒体推送...\n");
         printf("RTMP地址: %s\n", stream);
-        printf("SPS/PPS数据大小: %d bytes\n", size);
+        printf("SPS/PPS数据大小: %d bytes\n", config->extradata_size);
 
         int ret;
         if((ret = avformat_network_init()) < 0)
@@ -54,7 +60,7 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
 
         printf("网络初始化成功\n");
         
-        // 使用FLV格式 (RTMP通常封装为FLV)
+        // 创建输出格式上下文，使用FLV格式（RTMP通常使用FLV封装）
         avformat_alloc_output_context2(&ofmt_ctx,NULL,"flv",stream);
         if(!ofmt_ctx)
         {
@@ -64,6 +70,7 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
 
         printf("创建输出上下文成功\n");
 
+        // 创建新的输出流
         AVStream *out_stream = avformat_new_stream(ofmt_ctx,NULL);
         if(! out_stream)
         {
@@ -71,7 +78,7 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
                 goto end;
         }
 
-        out_stream->time_base = av_make_q(1, 30);
+        out_stream->time_base = av_make_q(1, config->fps);
 
         // 创建编码器上下文
         AVCodecContext *o_codec_ctx = avcodec_alloc_context3(NULL);
@@ -80,25 +87,24 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
                 goto end;
         }
 
-        // 设置编码器参数
-        o_codec_ctx->codec_id = AV_CODEC_ID_H264;
+        // 配置H.264编码器参数
+        o_codec_ctx->codec_id = config->codec_id;
         o_codec_ctx->codec_type = AVMEDIA_TYPE_VIDEO;
         o_codec_ctx->codec_tag = 0;
-        o_codec_ctx->pix_fmt = AV_PIX_FMT_NV12;  // 修改为YUV420P格式
-        o_codec_ctx->width = 1920;
-        o_codec_ctx->height = 1080;
-        o_codec_ctx->time_base = av_make_q(1, 25);  // 设置时间基准
-        o_codec_ctx->framerate = av_make_q(25, 1);  // 设置帧率
-        o_codec_ctx->gop_size = 50;  // 设置GOP大小
-        o_codec_ctx->max_b_frames = 0;  // 禁用B帧
-        o_codec_ctx->profile = FF_PROFILE_H264_HIGH;  // 设置H.264 profile
-        o_codec_ctx->level = 31;  // 设置H.264 level
-        o_codec_ctx->extradata = data;
-        o_codec_ctx->extradata_size = size;
+        o_codec_ctx->pix_fmt = config->pix_fmt;
+        o_codec_ctx->width = config->width;
+        o_codec_ctx->height = config->height;
+        o_codec_ctx->time_base = av_make_q(1, config->fps);
+        o_codec_ctx->framerate = av_make_q(config->fps, 1);
+        o_codec_ctx->gop_size = config->fps * 2;
+        o_codec_ctx->max_b_frames = config->max_b_frames;
+        o_codec_ctx->profile = config->profile;
+        o_codec_ctx->level = config->level;
+        o_codec_ctx->extradata = config->extradata;
+        o_codec_ctx->extradata_size = config->extradata_size;
 
         printf("  输出格式: %s\n", ofmt_ctx->oformat->name);
         printf("  帧率: %d/%d\n", o_codec_ctx->framerate.num, o_codec_ctx->framerate.den);
-
         printf("设置编码器参数: 分辨率 %dx%d\n", o_codec_ctx->width, o_codec_ctx->height);
         
         if (!out_stream->codecpar) {
@@ -116,12 +122,9 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
         {
                 printf("ok to copy codec parameters from encoder context.\n");
         }
-        out_stream->codecpar->codec_tag = 0; // some FLV encoders want this to be 0
-
-        // av_dump_format(ofmt_ctx,0,stream,1);
+        out_stream->codecpar->codec_tag = 0; // FLV编码器要求codec_tag为0
 
         printf("打开RTMP URL %s\n", stream);
-        // 打开输出URL（Open output URL）
         if (!(ofmt_ctx->oformat->flags & AVFMT_NOFILE)) {
                 int retry_count = 0;
                 while (1) {
@@ -131,19 +134,18 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
                         }
                         retry_count++;
                         printf("无法连接到RTMP服务器 '%s'，5秒后重试... (第%d次尝试)\n", stream, retry_count);
-                        sleep(5);  // 等待5秒
+                        sleep(5);
                 }
         }
         printf("打开输出URL成功\n");
-        //写文件头（Write file header）
+
         ret = avformat_write_header(ofmt_ctx, NULL);
         if (ret < 0) {
                 printf( "Error occurred when opening output URL\n");
                 goto end;
         }
         printf("写入文件头成功\n");
-        // free(data);
-        // 清理编码器上下文
+
         avcodec_free_context(&o_codec_ctx);
 
         printf("创建输出流成功\n");
@@ -154,6 +156,7 @@ int init_rtmp_streamer(char* stream,uint8_t *data,uint32_t size)
         printf("RTMP流媒体推送器关键参数:\n");
 
         return 0;
+
         end:
         if (ofmt_ctx && !(ofmt_ctx->oformat->flags & AVFMT_NOFILE))
                 avio_close(ofmt_ctx->pb);
