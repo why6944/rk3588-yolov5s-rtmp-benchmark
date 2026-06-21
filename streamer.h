@@ -1,6 +1,11 @@
 #ifndef _STREAMER_H_
 #define _STREAMER_H_
 
+// RTMP开关宏定义：1启用RTMP推送，0禁用（仅保留MPP编码）
+#ifndef ENABLE_RTMP
+#define ENABLE_RTMP 0
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

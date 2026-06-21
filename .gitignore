@@ -31,9 +31,13 @@ Makefile
 *.mkv
 *.flv
 *.yuv
+*.h264
 
-# 日志文件
+# 日志和性能采样
 *.log
+*.csv
+perf_log.csv
+debug_records/
 
 # 临时文件
 *.tmp

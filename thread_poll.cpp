@@ -1,41 +1,32 @@
-﻿#include "thread_poll.h"
+#include "thread_poll.h"
 
-ThreadPoll::ThreadPoll(const char* model_path, int num_threads)
+ThreadPoll::ThreadPoll(const char* model_path, int num_threads, bool draw_results)
 {
-    // 这里可以做一些通用初始化，比如 run_flag=true
     run_flag = true;
-    // 初始化：加载模型，启动线程
+    draw_results_ = draw_results;
     init(model_path, num_threads);
 }
 
 ThreadPoll::~ThreadPoll()
 {
-    // 在ThreadPoll析构函数添加
     std::cout << "Remaining tasks: " << tasks.size() << std::endl;
 
-    // 通知线程退出
     run_flag = false;
-    // 唤醒所有等待条件，让 worker() 能跳出循环
     condition.notify_all();
 
-    // 等待线程结束
     for(auto& t : threads)
     {
         if(t.joinable())
-        {
             t.join();
-        }
     }
-    // 这里你也可以释放模型等资源
     std::cout << "ThreadPoll destroyed.\n";
 }
 
 void ThreadPoll::init(const char* model_path, int num_threads)
 {
+    if(num_threads <= 0) num_threads = 1;
 
-    if(num_threads <= 0) num_threads = 1; // 保底
-    // 比如按照 num_threads 个 Yolov5s
-    // 也可以根据需求只创建几个再共享
+    // 创建 num_threads 个 yolo 实例（逻辑不变，i % 3 保证 npu_index 在 0/1/2 内）
     for(int i = 0; i < num_threads; i++)
     {
         auto yolo = std::make_shared<Yolov5s>(model_path, i % 3);
@@ -49,17 +40,30 @@ void ThreadPoll::init(const char* model_path, int num_threads)
     }
 }
 
-// worker：只对 tasks 这个队列做等待、取出、执行
 void ThreadPoll::worker(int id)
 {
-    // 取到专属的yolo实例
-    std::shared_ptr<Yolov5s> yolo = yolo_group[id];
+    // -------------------------------------------------------
+    // [修改] worker 现在真正使用自己专属的 yolo 实例
+    //
+    // 原来的问题：
+    //   第56行声明了 yolo = yolo_group[id]，但后面从来没用到它。
+    //   实际执行的 current_task() 内部按帧号选 yolo，
+    //   导致不同 worker 可能同时操作同一个 yolo 实例（数据竞争）。
+    //
+    // 新的做法：
+    //   任务本身不再选 yolo，worker 在调用任务时把自己的 my_yolo
+    //   作为参数传进去：current_task(my_yolo)
+    //   这样 my_yolo 永远只有这一个 worker 在用，没有并发冲突。
+    // -------------------------------------------------------
+    std::shared_ptr<Yolov5s> my_yolo = yolo_group[id];  // 专属 yolo，真正被使用
     std::cout << "worker线程启动, id=" << id << "\n";
+
     while(run_flag)
     {
-        std::packaged_task<ProcessResult()> current_task;
+        // [修改] 任务类型从 packaged_task<ProcessResult()>
+        // 改为 packaged_task<ProcessResult(shared_ptr<Yolov5s>)>
+        std::packaged_task<ProcessResult(std::shared_ptr<Yolov5s>)> current_task;
         {
-            // 阻塞等待队列内有任务，或等到退出信号
             std::unique_lock<std::mutex> lock(queue_mutex);
             condition.wait(lock, [this]
             {
@@ -68,74 +72,79 @@ void ThreadPoll::worker(int id)
 
             if(!run_flag)
             {
-                // 收到退出命令
                 std::cout << "worker " << id << " 下班！\n";
                 break;
             }
 
-            // 从 tasks 队列取出一个打包的任务
             current_task = std::move(tasks.front());
             tasks.pop();
         }
 
-        // 离开大锁区后执行真正的推理任务
         if(current_task.valid())
         {
-            printf("worker %d get task！\r\n", id); // 获取任务
-            // 如果任务有效，就调用 operator() 执行
-            current_task();
+            printf("worker %d get task！\r\n", id);
+            // [修改] 把自己的 my_yolo 作为参数注入任务
+            // 原来是 current_task()，任务自己选 yolo
+            // 现在是 current_task(my_yolo)，由 worker 决定用哪个 yolo
+            current_task(my_yolo);
         }
     }
-    // 在worker线程退出时添加
     std::cout << "Worker " << id << " exited, remaining tasks: " << tasks.size() << std::endl;
 }
 
-// 新的方法：往 tasks 里塞任务，并用 std::future<ProcessResult> 返回结果
 std::future<ProcessResult> ThreadPoll::submit_task_async(int index, cv::Mat img)
 {
-    // 1) 打包任务为 std::packaged_task<ProcessResult()>
-    //    其中捕获 [this, index, img] 就可以在lambda里使用
-    std::packaged_task<ProcessResult()> task([this, index, img]()
-    {
-        ProcessResult result;
-        try
+    // -------------------------------------------------------
+    // [修改] lambda 的参数从无参数改为接收一个 yolo 实例
+    //
+    // 原来：
+    //   packaged_task<ProcessResult()> task([this, index, img]() {
+    //       auto yolo = yolo_group[index % yolo_group.size()]; // 按帧号选
+    //       ...
+    //   });
+    //
+    // 新的：
+    //   packaged_task<ProcessResult(shared_ptr<Yolov5s>)> task([index, img](shared_ptr<Yolov5s> yolo) {
+    //       // yolo 由调用方（worker）传入，不在这里选
+    //       ...
+    //   });
+    //
+    // 关键变化：lambda 不再捕获 this，不再访问 yolo_group，
+    // yolo 由 worker 调用时注入，谁执行任务谁决定用哪个 yolo。
+    // -------------------------------------------------------
+    bool draw_results = draw_results_;
+    std::packaged_task<ProcessResult(std::shared_ptr<Yolov5s>)> task(
+        [index, img, draw_results](std::shared_ptr<Yolov5s> yolo) mutable
         {
-            // 从 yolo_group 里选一个做推理，这里简单选 index % yolo_group.size()
-            // 你也可以做负载均衡
-            auto yolo = yolo_group[index % yolo_group.size()];
+            ProcessResult result;
+            try
+            {
+                printf("worker get task %d！\r\n", index);
 
-            printf("worker get task %d！\r\n", index); // 获取任务
+                detect_result_group_t detections;
+                yolo->inference_image(img, detections);
+                if(draw_results)
+                    yolo->draw_result(img, detections);
 
-            // 推理
-            detect_result_group_t detections;
-            yolo->inference_image(img, detections);
-            yolo->draw_result(const_cast<cv::Mat&>(img), detections);
-
-            // 填充结果
-            result.processed_img = img;
-            result.detection_results = detections;
-            result.success = true;
+                result.processed_img       = img;
+                result.detection_results   = detections;
+                result.success             = true;
+            }
+            catch(const std::exception& e)
+            {
+                result.error_msg = e.what();
+                result.success   = false;
+            }
+            return result;
         }
-        catch(const std::exception& e)
-        {
-            result.error_msg = e.what();
-            result.success = false;
-        }
-        return result;
-    });
+    );
 
-    // 2) 先拿到 future，然后把 task 放进队列
     std::future<ProcessResult> future = task.get_future();
     {
-        // 加锁操作队列
         std::unique_lock<std::mutex> lock(queue_mutex);
-
-        // 把打包好的任务放到队列
         tasks.emplace(std::move(task));
         std::cout << "[submit_task_async] 已压入tasks队列, 现在大小=" << tasks.size() << std::endl;
     }
-    // 3) 唤醒一个worker线程来执行
     condition.notify_one();
-    // 4) 返回 future，后续可以 .get() 拿到结果
     return future;
 }

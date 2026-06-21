@@ -13,10 +13,14 @@ typedef struct {
 
 static StreamerContext g_streamer_ctx = {0};
 
+void close_streamer();
+
 int init_streamer(int width, int height, int fps, int bitrate, const char *rtmp_url) {
     if (g_streamer_ctx.is_initialized) {
         return 0;
     }
+
+    const int use_rtmp = (rtmp_url != NULL && rtmp_url[0] != '\0');
 
     // 初始化MPP编码器
     g_streamer_ctx.mpp_ctx = alloc_mpp_context();
@@ -33,26 +37,31 @@ int init_streamer(int width, int height, int fps, int bitrate, const char *rtmp_
     g_streamer_ctx.mpp_ctx->fps_in_num = fps;
     g_streamer_ctx.mpp_ctx->fps_in_den = 1;
 
-    g_streamer_ctx.mpp_ctx->fps_in_flex = 0;  // 使用固定帧率模式
+    g_streamer_ctx.mpp_ctx->fps_out_flex = 0;  // 使用固定帧率模式
     g_streamer_ctx.mpp_ctx->fps_out_num = fps;
     g_streamer_ctx.mpp_ctx->fps_out_den = 1;
-    
+
     g_streamer_ctx.mpp_ctx->bps = bitrate;
     g_streamer_ctx.mpp_ctx->gop_len = fps * 2;  // GOP长度为帧率的2倍
-    g_streamer_ctx.mpp_ctx->write_frame = write_frame;
+    g_streamer_ctx.mpp_ctx->write_frame = use_rtmp ? write_frame : NULL;
     g_streamer_ctx.mpp_ctx->type = MPP_VIDEO_CodingAVC;  // 设置H.264编码
-    g_streamer_ctx.mpp_ctx->fmt = MPP_FMT_YUV420SP;  // 设置YUV420P格式
+    g_streamer_ctx.mpp_ctx->fmt = MPP_FMT_YUV420SP;  // 设置NV12格式
     g_streamer_ctx.mpp_ctx->rc_mode = MPP_ENC_RC_MODE_CBR;
 
     printf("初始化流媒体推送器...\n");
     printf("视频参数: %dx%d, %d fps, %d bps\n", width, height, fps, bitrate);
-    printf("RTMP地址: %s\n", rtmp_url);
-    
+    if (use_rtmp) {
+        printf("RTMP地址: %s\n", rtmp_url);
+    } else {
+        printf("RTMP未启用，仅执行MPP编码路径\n");
+    }
+
     // 初始化MPP
     int ret = g_streamer_ctx.mpp_ctx->init_mpp(g_streamer_ctx.mpp_ctx);
     if(ret != 0)
     {
         printf("mpp init fail!\n");
+        return -1;
     }
     else
     {
@@ -62,43 +71,48 @@ int init_streamer(int width, int height, int fps, int bitrate, const char *rtmp_
     // 获取SPS/PPS信息
     if (!g_streamer_ctx.mpp_ctx->get_header(g_streamer_ctx.mpp_ctx, &g_streamer_ctx.sps_header)) {
         printf("Failed to get SPS/PPS header\n");
+        close_streamer();
         return -1;
     }
-    
 
-    g_streamer_ctx.rtmp_ctx = (RtmpContext *)malloc(sizeof(RtmpContext));
+    if (use_rtmp) {
+        // 初始化RTMP上下文和推流
+        g_streamer_ctx.rtmp_ctx = (RtmpContext *)malloc(sizeof(RtmpContext));
+        if (!g_streamer_ctx.rtmp_ctx) {
+            printf("Failed to allocate RTMP context\n");
+            close_streamer();
+            return -1;
+        }
 
-    g_streamer_ctx.rtmp_ctx->codec_id = AV_CODEC_ID_H264;
-    g_streamer_ctx.rtmp_ctx->pix_fmt = AV_PIX_FMT_NV12;  // YUV420P格式
-    g_streamer_ctx.rtmp_ctx->width = width;
-    g_streamer_ctx.rtmp_ctx->height = height;
-    g_streamer_ctx.rtmp_ctx->fps = fps;
-    g_streamer_ctx.rtmp_ctx->max_b_frames = 0;  // 禁用B帧
-    g_streamer_ctx.rtmp_ctx->profile = FF_PROFILE_H264_HIGH;  // 设置H.264 profile
-    g_streamer_ctx.rtmp_ctx->level = 31;  // 设置H.264 level
-    g_streamer_ctx.rtmp_ctx->extradata = g_streamer_ctx.sps_header.data;
-    g_streamer_ctx.rtmp_ctx->extradata_size = g_streamer_ctx.sps_header.size;
+        memset(g_streamer_ctx.rtmp_ctx, 0, sizeof(RtmpContext));
+        g_streamer_ctx.rtmp_ctx->codec_id = AV_CODEC_ID_H264;
+        g_streamer_ctx.rtmp_ctx->pix_fmt = AV_PIX_FMT_NV12;
+        g_streamer_ctx.rtmp_ctx->width = width;
+        g_streamer_ctx.rtmp_ctx->height = height;
+        g_streamer_ctx.rtmp_ctx->fps = fps;
+        g_streamer_ctx.rtmp_ctx->max_b_frames = 0;
+        g_streamer_ctx.rtmp_ctx->profile = AV_PROFILE_H264_HIGH;
+        g_streamer_ctx.rtmp_ctx->level = 31;
+        g_streamer_ctx.rtmp_ctx->extradata = g_streamer_ctx.sps_header.data;
+        g_streamer_ctx.rtmp_ctx->extradata_size = g_streamer_ctx.sps_header.size;
 
-    printf("初始化RTMP...\n");
-    // 初始化RTMP
-    if (init_rtmp_streamer((char*)rtmp_url, g_streamer_ctx.rtmp_ctx) < 0) {
-        printf("Failed to initialize RTMP streamer\n");
-        return -1;
+        printf("初始化RTMP...\n");
+        if (init_rtmp_streamer((char*)rtmp_url, g_streamer_ctx.rtmp_ctx) < 0) {
+            printf("Failed to initialize RTMP streamer\n");
+            close_streamer();
+            return -1;
+        }
+        printf("初始化RTMP成功\n");
     }
-    printf("初始化RTMP成功\n");
 
     g_streamer_ctx.is_initialized = 1;
     return 0;
 }
 
 int process_frame(uint8_t *frame_data, int frame_size) {
-    if (!g_streamer_ctx.is_initialized || !g_streamer_ctx.mpp_ctx) {
+    if (!g_streamer_ctx.mpp_ctx) {
         return -1;
     }
-
-    // 打印输入帧信息
-    printf("输入帧信息: 大小=%d bytes, 格式=nv12\n", frame_size);
-    
 
     // 使用MPP进行编码
     if (!g_streamer_ctx.mpp_ctx->process_image(frame_data, frame_size, g_streamer_ctx.mpp_ctx)) {
@@ -114,17 +128,16 @@ void close_streamer() {
         g_streamer_ctx.mpp_ctx->close(g_streamer_ctx.mpp_ctx);
         g_streamer_ctx.mpp_ctx = NULL;
     }
-    
+
     if (g_streamer_ctx.sps_header.data) {
         free(g_streamer_ctx.sps_header.data);
         g_streamer_ctx.sps_header.data = NULL;
     }
-    
-    // 释放rtmp_ctx内存
+
     if (g_streamer_ctx.rtmp_ctx) {
         free(g_streamer_ctx.rtmp_ctx);
         g_streamer_ctx.rtmp_ctx = NULL;
     }
-    
+
     g_streamer_ctx.is_initialized = 0;
-} 
+}

@@ -1,4 +1,4 @@
-﻿#ifndef SAFEQUEUE_H
+#ifndef SAFEQUEUE_H
 #define SAFEQUEUE_H
 
 #include <queue>
@@ -28,7 +28,7 @@ public:
     bool dequeue(T &t)
     {
         unique_lock<mutex> lock(m);
-        cond_not_empty.wait(lock,[this] { return !q.empty(); });
+        cond_not_empty.wait(lock,[this] { return !q.empty() || stop_flag; });
         if(stop_flag && q.empty()) {
             // 若收到停止信号且队列也空了，就返回 false
             return false;

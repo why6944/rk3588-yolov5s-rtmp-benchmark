@@ -1,14 +1,19 @@
 # 指定使用的最低 CMake 版本，以确保支持所有需要的功能和特性。
 cmake_minimum_required(VERSION 3.5)
+
 # 定义项目名称为 cv。CMake 将使用这个名称来创建相关构建目录和变量。
 project(cv)
+
 # 设置编译器标准为 C++14。这将确保代码在 C++14 标准下进行编译。
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 # 输出系统的基本信息，包括系统名称和版本号，便于调试和确认构建环境。
 message(STATUS "System: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}")
+
 # 查找并引入 OpenCV 库。如果找不到，将会给出错误提示。
 find_package(OpenCV REQUIRED)
+
 # 输出 OpenCV 库的信息，包括版本、库路径和头文件路径，帮助确认配置是否正确。
 message(STATUS "OpenCV library status:")
 message(STATUS "    version: ${OpenCV_VERSION}")       # 输出 OpenCV 的版本
@@ -21,6 +26,20 @@ pkg_check_modules(AVCODEC REQUIRED libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED libavformat)
 pkg_check_modules(AVUTIL REQUIRED libavutil)
 pkg_check_modules(SWSCALE REQUIRED libswscale)
+
+# 板子上同时存在系统 FFmpeg 58 和 /usr/local FFmpeg 62。
+# GCC 默认会优先搜索 /usr/local/include，因此这里也明确链接 /usr/local/lib，避免头文件/库 ABI 混用。
+if(EXISTS "/usr/local/lib/libavformat.so")
+    set(AVCODEC_INCLUDE_DIRS "/usr/local/include")
+    set(AVFORMAT_INCLUDE_DIRS "/usr/local/include")
+    set(AVUTIL_INCLUDE_DIRS "/usr/local/include")
+    set(SWSCALE_INCLUDE_DIRS "/usr/local/include")
+    set(AVCODEC_LIBRARIES "/usr/local/lib/libavcodec.so")
+    set(AVFORMAT_LIBRARIES "/usr/local/lib/libavformat.so")
+    set(AVUTIL_LIBRARIES "/usr/local/lib/libavutil.so")
+    set(SWSCALE_LIBRARIES "/usr/local/lib/libswscale.so")
+endif()
+
 # 打印消息到 CMake 构建过程中
 message("find FFmpeg Library")
 
@@ -30,6 +49,12 @@ if(NOT MPP_LIBRARY)
     message(FATAL_ERROR "MPP library not found")
 endif()
 message("find MPP library")
+
+# 查找 OpenCL（解决 FFmpeg 依赖）
+find_package(OpenCL REQUIRED)
+if(OpenCL_FOUND)
+    message(STATUS "OpenCL found: ${OpenCL_LIBRARIES}")
+endif()
 
 # 打印消息到 CMake 构建过程中
 message(" this is meihua embedded!")
@@ -56,15 +81,19 @@ set(RGA_INCLUDE_DIRS    ${RGA_PATH}/include)
 # 设置 RGA 库的路径
 set(RGA_LIBS            ${RGA_PATH}/lib/Linux/${LIB_ARCH}/librga.so)
 
-
-# 将 OpenCV 的头文件路径添加到编译器的搜索路径。
-# 这使得源文件可以正确包含 OpenCV 的头文件。
+# 将头文件路径添加到编译器的搜索路径。
 include_directories(
     ${OpenCV_INCLUDE_DIRS}
     ${RKNN_INCLUDE_DIRS}
     ${RGA_INCLUDE_DIRS}
+    ${AVCODEC_INCLUDE_DIRS}
+    ${AVFORMAT_INCLUDE_DIRS}
+    ${AVUTIL_INCLUDE_DIRS}
+    ${SWSCALE_INCLUDE_DIRS}
+    ${OpenCL_INCLUDE_DIRS}
 )
-# 定义一个名为 cv 的可执行目标，该目标将从 main.cpp 源文件生成。
+
+# 定义可执行目标
 add_executable(app 
     main.cpp 
     thread_poll.cpp
@@ -73,19 +102,28 @@ add_executable(app
     streamer.c
     rtmp.c
     mpp.c
-    )
+    perf_monitor.cpp
+    benchmark_stats.cpp
+)
 
-# 将 OpenCV 的库与目标可执行文件 cv 链接，确保在程序运行时能够调用 OpenCV 函数。
+# 链接所有需要的库
 target_link_libraries(app 
     ${OpenCV_LIBS}
     ${RKNN_LIBS}
     ${RGA_LIBS}
-    # mpp的链接库
     ${MPP_LIBRARY}
-    # FFmpeg的链接库
     ${AVCODEC_LIBRARIES}
     ${AVFORMAT_LIBRARIES}
     ${AVUTIL_LIBRARIES}
     ${SWSCALE_LIBRARIES}
-    )
-
+    ${OpenCL_LIBRARIES}
+    pthread
+    m
+    dl
+)
+option(ENABLE_RTMP "Enable RTMP streaming" OFF)
+if(ENABLE_RTMP)
+    target_compile_definitions(app PRIVATE ENABLE_RTMP=1)
+else()
+    target_compile_definitions(app PRIVATE ENABLE_RTMP=0)
+endif()

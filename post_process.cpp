@@ -1,4 +1,4 @@
-﻿#include "post_process.h"
+#include "post_process.h"
 #include <cmath>
 #include <vector>
 #include <string>
@@ -6,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <algorithm>
+#include <mutex>
 
 using namespace std;
 
@@ -104,16 +105,14 @@ int readLines(const char * LablePath, vector<string> &lable_vector, int maxLines
     if (!file.is_open())
     {
         std::cerr << "file " << LablePath << " can not open!" << endl;
+        return 0;
     }
 
+    lable_vector.clear();
     string line;
-    while (getline(file, line))
+    while (lable_vector.size() < static_cast<size_t>(maxLines) && getline(file, line))
     {
         lable_vector.emplace_back(line);
-        if (lable_vector.size() > static_cast<size_t>(maxLines))
-        {
-            break;
-        }
     }
     return lable_vector.size();
 }
@@ -125,7 +124,7 @@ int LoadLableName(const char * filepath, vector<string> &lable_vector, int num_l
     {
         // cout << "标签数量是 " << line_num << endl;
     }
-    std::cout << "labels.size()=" << labels.size() << std::endl;
+    std::cout << "labels.size()=" << lable_vector.size() << std::endl;
     return line_num;
 }
 
@@ -279,20 +278,11 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
                  float nms_threshold, float scale_w, float scale_h,
                  std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t &result_group)
 {
-    // 1. 加载标签
-    static bool g_labels_loaded = false;
-    if(!g_labels_loaded)
-    {
-        // 只有第一次才加载标签文件
-        int nlines = LoadLableName(LABLE_PATH, labels, OBJ_CLASS_NUM);
-        g_labels_loaded = true;
-    }
-    else
-    {
-        // 后续不再重复加载
-        // 如果你仍想打印，可以查看 labels.size() 之类
-        // cout << "已加载过标签, labels.size()=" << labels.size() << endl;
-    }
+    // 1. 加载标签。post_process 会被多个 worker 同时调用，首次加载必须线程安全。
+    static std::once_flag labels_once;
+    std::call_once(labels_once, []() {
+        LoadLableName(LABLE_PATH, labels, OBJ_CLASS_NUM);
+    });
     // for (string &s : labels)
     // {
     //     cout << "lable name " << s << endl;
@@ -384,7 +374,7 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
     
     for(int i = 0; i < validCount; i++)
     {
-        if(indexArray[i] == -1 || count > MAX_OBJ_BOXS)
+        if(indexArray[i] == -1 || count >= MAX_OBJ_BOXS)
         {
             continue;
         }
@@ -403,9 +393,12 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
         result_group.result[count].box.ymax = (int)(clamp(ymax, 0, model_height) / scale_h);
         result_group.result[count].box_conf = box_conf;
 
-        const char *label_temp = labels[id].c_str();
+        const char *label_temp = (id >= 0 && id < static_cast<int>(labels.size()))
+                                   ? labels[id].c_str()
+                                   : "unknown";
         // 将类别名称复制到检测结果组中
-        strncpy(result_group.result[count].label, label_temp, 32);
+        strncpy(result_group.result[count].label, label_temp, sizeof(result_group.result[count].label) - 1);
+        result_group.result[count].label[sizeof(result_group.result[count].label) - 1] = '\0';
 
         // printf("%s\n", labels[id].c_str());
         count++;

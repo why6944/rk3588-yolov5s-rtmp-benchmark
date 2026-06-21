@@ -174,8 +174,8 @@ static int init_mpp(MppContext *mpp_enc_data)
     }
 
     // =================================初始化=================================
-    // 初始化缓冲区组
-    ret = mpp_buffer_group_get_internal(&mpp_enc_data->buf_grp, MPP_BUFFER_TYPE_DRM | MPP_BUFFER_FLAGS_CACHABLE);
+    // 初始化缓冲区组（使用内部接口指定普通类型，避免部分平台 DRM 实现问题）
+    ret = mpp_buffer_group_get_internal(&mpp_enc_data->buf_grp, MPP_BUFFER_TYPE_DRM);
     if (ret) {
         printf("failed to get mpp buffer group ret %d\n", ret);
         goto MPP_INIT_OUT;
@@ -186,18 +186,24 @@ static int init_mpp(MppContext *mpp_enc_data)
     }
 
     // 分配输入帧缓冲区，这里由于并没有使用FPC，所以frame_size并不需要加上header_size
+    printf("mpp: about to get frm_buf, buf_grp=%p, frame_size=%zu\n", mpp_enc_data->buf_grp, mpp_enc_data->frame_size);
+    fflush(stdout);
     ret = mpp_buffer_get(mpp_enc_data->buf_grp, &mpp_enc_data->frm_buf, mpp_enc_data->frame_size);
     if (ret) {
         printf("failed to get buffer for input frame ret %d\n", ret);
         goto MPP_INIT_OUT;
     }
+    printf("mpp: got frm_buf %p\n", mpp_enc_data->frm_buf);
 
     // 分配输出包缓冲区
+    printf("mpp: about to get pkt_buf, buf_grp=%p, frame_size=%zu\n", mpp_enc_data->buf_grp, mpp_enc_data->frame_size);
+    fflush(stdout);
     ret = mpp_buffer_get(mpp_enc_data->buf_grp, &mpp_enc_data->pkt_buf, mpp_enc_data->frame_size);
     if (ret) {
         printf("failed to get buffer for output packet ret %d\n", ret);
         goto MPP_INIT_OUT;
     }
+    printf("mpp: got pkt_buf %p\n", mpp_enc_data->pkt_buf);
 
     // =================================编码=================================
     // 创建MPP上下文
@@ -206,6 +212,7 @@ static int init_mpp(MppContext *mpp_enc_data)
         printf("mpp_create failed ret %d\n", ret);
         goto MPP_INIT_OUT;
     }
+    printf("mpp: created ctx %p mpi %p\n", mpp_enc_data->ctx, mpp_enc_data->mpi);
 
     // 设置输出超时
     ret = mpp_enc_data->mpi->control(mpp_enc_data->ctx, MPP_SET_OUTPUT_TIMEOUT, &timeout);
@@ -213,6 +220,7 @@ static int init_mpp(MppContext *mpp_enc_data)
         printf("mpi control set output timeout failed ret %d\n", ret);
         goto MPP_INIT_OUT;
     }
+    printf("mpp: set output timeout ok\n");
 
     // 初始化编码器
     ret = mpp_init(mpp_enc_data->ctx, MPP_CTX_ENC, mpp_enc_data->type);
@@ -220,6 +228,7 @@ static int init_mpp(MppContext *mpp_enc_data)
         printf("mpp_init failed ret %d\n", ret);
         goto MPP_INIT_OUT;
     }
+    printf("mpp: mpp_init ok\n");
 
     // 初始化编码器配置
     ret = mpp_enc_cfg_init(&mpp_enc_data->cfg);
@@ -560,10 +569,12 @@ static _Bool process_image(uint8_t *p, int size, MppContext *mpp_enc_data)
                     log_len += snprintf(log_buf + log_len, log_size - log_len,
                                       " qp %2d", avg_qp);
 
-                // 获取实时码率
+                // 获取实时码率（某些 SDK 版本未定义 KEY_ENC_BPS_RT）
+#ifdef KEY_ENC_BPS_RT
                 if (MPP_OK == mpp_meta_get_s32(meta, KEY_ENC_BPS_RT, &bps_rt))
                     log_len += snprintf(log_buf + log_len, log_size - log_len,
                                       " bps_rt %d", bps_rt);
+#endif
             }
 
             printf("%s\n", log_buf);
