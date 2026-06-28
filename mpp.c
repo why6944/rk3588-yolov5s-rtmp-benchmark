@@ -37,6 +37,7 @@
 //============================================使用模板============================================
 
 #include "mpp.h"
+#include "debug_log.h"
 
 // 声明内部函数
 static void mpp_close(MppContext* ctx);
@@ -514,14 +515,14 @@ static _Bool process_image(uint8_t *p, int size, MppContext *mpp_enc_data)
             mpp_enc_data->pkt_eos = mpp_packet_get_eos(packet);
 
             // 保存前5帧编码后的数据（用于调试）
-            if (save_count < 5) {
+            if (g_verbose_log && save_count < 5) {
                 char filename[64];
                 snprintf(filename, sizeof(filename), "encoded_frame_%d.h264", save_count);
                 FILE *fp = fopen(filename, "wb");
                 if (fp) {
                     fwrite(ptr, 1, len, fp);
                     fclose(fp);
-                    printf("已保存编码后的帧到文件: %s, 大小: %zu bytes\n", filename, len);
+                    LOG_DEBUG("已保存编码后的帧到文件: %s, 大小: %zu bytes\n", filename, len);
                     save_count++;
                 }
             }
@@ -529,7 +530,7 @@ static _Bool process_image(uint8_t *p, int size, MppContext *mpp_enc_data)
             // 调用回调函数处理编码后的数据
             if (mpp_enc_data->write_frame)
                 if (!(mpp_enc_data->write_frame)(ptr, len))
-                    printf("------------sendok!\n");
+                    LOG_DEBUG("------------sendok!\n");
 
             // 记录编码信息
             log_len += snprintf(log_buf + log_len, log_size - log_len,
@@ -577,7 +578,7 @@ static _Bool process_image(uint8_t *p, int size, MppContext *mpp_enc_data)
 #endif
             }
 
-            printf("%s\n", log_buf);
+            LOG_DEBUG("%s\n", log_buf);
 
             mpp_packet_deinit(&packet);
             mpp_enc_data->stream_size += len;

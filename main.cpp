@@ -21,6 +21,7 @@
 #include "streamer.h"
 #include "perf_monitor.h"
 #include "benchmark_stats.h"
+#include "debug_log.h"
 
 #include "rga.h"
 #include "drmrga.h"
@@ -34,13 +35,20 @@ int g_height     = 0;
 int g_hor_stride = 0;
 int g_ver_stride = 0;
 
+extern "C" {
+int g_verbose_log = 0;
+float g_box_threshold = BOX_THRESHOLD;
+float g_nms_threshold = NMS_THRESHOLD;
+}
+
 enum class RunMode
 {
     Full,
     InferOnly,
     RknnOnly,
     MppOnly,
-    Rtmp
+    Rtmp,
+    Snapshot
 };
 
 struct RunOptions
@@ -49,6 +57,8 @@ struct RunOptions
     int loops = 900;
     RunMode mode = RunMode::Full;
     std::string rtmp_url = "rtmp://192.168.137.1:1935/live/app";
+    int snapshot_frame = 120;
+    std::string snapshot_output = "../debug_records/snapshot.png";
 };
 
 static const char* modeName(RunMode mode)
@@ -60,6 +70,7 @@ static const char* modeName(RunMode mode)
     case RunMode::RknnOnly:  return "rknn-only";
     case RunMode::MppOnly:   return "mpp-only";
     case RunMode::Rtmp:      return "rtmp";
+    case RunMode::Snapshot:  return "snapshot";
     }
     return "full";
 }
@@ -89,6 +100,8 @@ static RunMode parseMode(const char *value)
         return RunMode::MppOnly;
     if(std::strcmp(value, "rtmp") == 0 || std::strcmp(value, "rtmp-only") == 0)
         return RunMode::Rtmp;
+    if(std::strcmp(value, "snapshot") == 0 || std::strcmp(value, "snap") == 0)
+        return RunMode::Snapshot;
     return RunMode::Full;
 }
 
@@ -121,6 +134,30 @@ static RunOptions parseOptions(int argc, char **argv)
         {
             options.loops = std::atoi(argv[i] + 8);
         }
+        else if(std::strcmp(argv[i], "--verbose") == 0 || std::strcmp(argv[i], "-v") == 0)
+        {
+            g_verbose_log = 1;
+        }
+        else if(std::strcmp(argv[i], "--quiet") == 0)
+        {
+            g_verbose_log = 0;
+        }
+        else if(std::strcmp(argv[i], "--box-threshold") == 0 && i + 1 < argc)
+        {
+            g_box_threshold = std::atof(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--box-threshold=", 16) == 0)
+        {
+            g_box_threshold = std::atof(argv[i] + 16);
+        }
+        else if(std::strcmp(argv[i], "--nms-threshold") == 0 && i + 1 < argc)
+        {
+            g_nms_threshold = std::atof(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--nms-threshold=", 16) == 0)
+        {
+            g_nms_threshold = std::atof(argv[i] + 16);
+        }
         else if(std::strcmp(argv[i], "--rtmp-url") == 0 && i + 1 < argc)
         {
             options.rtmp_url = argv[++i];
@@ -128,6 +165,22 @@ static RunOptions parseOptions(int argc, char **argv)
         else if(std::strncmp(argv[i], "--rtmp-url=", 11) == 0)
         {
             options.rtmp_url = argv[i] + 11;
+        }
+        else if(std::strcmp(argv[i], "--snapshot-frame") == 0 && i + 1 < argc)
+        {
+            options.snapshot_frame = std::atoi(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--snapshot-frame=", 17) == 0)
+        {
+            options.snapshot_frame = std::atoi(argv[i] + 17);
+        }
+        else if(std::strcmp(argv[i], "--snapshot-output") == 0 && i + 1 < argc)
+        {
+            options.snapshot_output = argv[++i];
+        }
+        else if(std::strncmp(argv[i], "--snapshot-output=", 18) == 0)
+        {
+            options.snapshot_output = argv[i] + 18;
         }
         else if(argv[i][0] != '-')
         {
@@ -190,7 +243,7 @@ void readThreadFunc(cv::VideoCapture &cap)
             break;
         }
         FrameData data{ std::move(frame), idx++ };
-        g_readQueue.enqueue(data);
+        g_readQueue.enqueue(std::move(data));
     }
     g_readFinish = true;
     std::cerr << "[ReadThread] finished.\n";
@@ -208,7 +261,7 @@ void aggregatorThreadFunc(ThreadPoll &npu_pool)
         {
             if(g_readQueue.dequeue(inputFD))
             {
-                auto fut = npu_pool.submit_task_async(inputFD.index, inputFD.frame);
+                auto fut = npu_pool.submit_task_async(inputFD.index, std::move(inputFD.frame));
                 tasks_inflight[inputFD.index] = std::move(fut);
             }
         }
@@ -224,7 +277,7 @@ void aggregatorThreadFunc(ThreadPoll &npu_pool)
                 FrameData outputFD;
                 outputFD.index = nextWriteIndex;
                 outputFD.frame = std::move(result.processed_img);
-                g_writeQueue.enqueue(outputFD);
+                g_writeQueue.enqueue(std::move(outputFD));
 
                 tasks_inflight.erase(it);
                 nextWriteIndex++;
@@ -321,6 +374,47 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode)
     std::cerr << "[WriteThread] finished.\n";
 }
 
+static int runSnapshot(const RunOptions &options, const std::string &inPath)
+{
+    cv::VideoCapture cap(inPath);
+    if(!cap.isOpened())
+    {
+        std::cerr << "Fail to open input video: " << inPath << "\n";
+        return -1;
+    }
+
+    cv::Mat frame;
+    int idx = 0;
+    while(idx <= options.snapshot_frame)
+    {
+        if(!cap.read(frame) || frame.empty())
+        {
+            std::cerr << "Fail to read snapshot frame: " << options.snapshot_frame << "\n";
+            return -1;
+        }
+        idx++;
+    }
+
+    BenchmarkStats::instance().reset(1, modeName(options.mode));
+    Yolov5s yolo("../model/yolov5s.rknn", 0);
+    detect_result_group_t detections;
+    yolo.inference_image(frame, detections);
+    yolo.draw_result(frame, detections);
+
+    if(!cv::imwrite(options.snapshot_output, frame))
+    {
+        std::cerr << "Fail to write snapshot: " << options.snapshot_output << "\n";
+        return -1;
+    }
+
+    std::cout << "[Snapshot] frame=" << options.snapshot_frame
+              << ", boxes=" << detections.box_count
+              << ", output=" << options.snapshot_output << std::endl;
+    BenchmarkStats::instance().print_summary();
+    BenchmarkStats::instance().append_detail_csv("../debug_records/csv/benchmark_detail.csv");
+    return 0;
+}
+
 static int runRknnOnly(const RunOptions &options, const std::string &inPath)
 {
     cv::VideoCapture cap(inPath);
@@ -369,6 +463,7 @@ static int runRknnOnly(const RunOptions &options, const std::string &inPath)
     BenchmarkStats::instance().set_total_elapsed_ms(elapsed_ms.count());
     BenchmarkStats::instance().print_summary();
     BenchmarkStats::instance().append_csv("../debug_records/csv/benchmark_summary.csv");
+    BenchmarkStats::instance().append_detail_csv("../debug_records/csv/benchmark_detail.csv");
 
     PerfMonitor::instance().stop();
     std::cerr << "[Main] All done.\n";
@@ -384,10 +479,16 @@ int main(int argc, char **argv)
 
     std::cout << "[Main] mode=" << modeName(options.mode)
               << ", thread_count=" << options.thread_count
-              << ", loops=" << options.loops;
+              << ", loops=" << options.loops
+              << ", verbose=" << g_verbose_log
+              << ", box_threshold=" << g_box_threshold
+              << ", nms_threshold=" << g_nms_threshold;
     if(options.mode == RunMode::Rtmp)
         std::cout << ", rtmp_url=" << options.rtmp_url;
     std::cout << std::endl;
+
+    if(options.mode == RunMode::Snapshot)
+        return runSnapshot(options, inPath);
 
     if(options.mode == RunMode::RknnOnly)
         return runRknnOnly(options, inPath);
@@ -472,6 +573,7 @@ int main(int argc, char **argv)
     BenchmarkStats::instance().set_total_elapsed_ms(elapsed_ms.count());
     BenchmarkStats::instance().print_summary();
     BenchmarkStats::instance().append_csv("../debug_records/csv/benchmark_summary.csv");
+    BenchmarkStats::instance().append_detail_csv("../debug_records/csv/benchmark_detail.csv");
 
     PerfMonitor::instance().stop();
 

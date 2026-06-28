@@ -1,6 +1,7 @@
 #include "yolov5s.h"
 #include "post_process.h"
 #include "benchmark_stats.h"
+#include "debug_log.h"
 
 #include <chrono>
 
@@ -23,7 +24,7 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index)
     if (ret != 0)
         printf("rknn init failed! error code: %d\n", ret);
     else
-        printf("yolo %d初始化成功！\n", npu_index);
+        LOG_DEBUG("yolo %d初始化成功！\n", npu_index);
 
     if(npu_index % 4 == 0)      { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_0); }
     else if(npu_index % 4 == 1) { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_1); }
@@ -41,7 +42,7 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index)
         input_attrs[i].index = i;
         ret = rknn_query(context, RKNN_QUERY_INPUT_ATTR, &(this->input_attrs[i]), sizeof(this->input_attrs[i]));
         if (ret != 0) printf("rknn_query input_attrs failed! error code: %d\n", ret);
-        printf("输入的tensor%d属性为：\n", i);
+        LOG_DEBUG("输入的tensor%d属性为：\n", i);
         print_tensor_attr(&(this->input_attrs[i]));
     }
 
@@ -79,7 +80,7 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index)
     if (rga_dst_handle_ == 0)
         printf("[yolo %d] dst_buf importbuffer 失败！\n", npu_index);
     else
-        printf("[yolo %d] dst_buf 预分配成功，大小=%d bytes\n", npu_index, dst_size);
+        LOG_DEBUG("[yolo %d] dst_buf 预分配成功，大小=%d bytes\n", npu_index, dst_size);
 }
 
 Yolov5s::~Yolov5s()
@@ -116,7 +117,7 @@ void Yolov5s::ensure_src_buffers(int img_w, int img_h, int img_c)
 
     rga_cached_img_w_ = img_w;
     rga_cached_img_h_ = img_h;
-    printf("[Yolov5s] src_buf 分配完成，尺寸 %dx%dx%d\n", img_w, img_h, img_c);
+    LOG_DEBUG("[Yolov5s] src_buf 分配完成，尺寸 %dx%dx%d\n", img_w, img_h, img_c);
 }
 
 void Yolov5s::release_rga_buffers()
@@ -152,8 +153,8 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
 {
     int ret = 0;
 
-    float nms_threshold      = NMS_THRESHOLD;
-    float box_conf_threshold = BOX_THRESHOLD;
+    float nms_threshold      = g_nms_threshold;
+    float box_conf_threshold = g_box_threshold;
 
     this->img_channel = orig_img.channels();
 
@@ -260,7 +261,9 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
     inputs[0].pass_through = false;
     inputs[0].fmt         = RKNN_TENSOR_NHWC;
     inputs[0].buf         = rga_dst_buf_;
-    rknn_inputs_set(context, inputs_num, inputs);
+    auto input_set_start = std::chrono::high_resolution_clock::now();
+    ret = rknn_inputs_set(context, inputs_num, inputs);
+    auto input_set_end = std::chrono::high_resolution_clock::now();
 
     int outputs_num = num_tensors.n_output;
     rknn_output outputs[outputs_num];
@@ -268,10 +271,17 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
     for (int i = 0; i < outputs_num; i++)
         outputs[i].want_float = 0;
 
+    auto run_start = std::chrono::high_resolution_clock::now();
     ret = rknn_run(context, NULL);
+    auto run_end = std::chrono::high_resolution_clock::now();
+    auto outputs_get_start = std::chrono::high_resolution_clock::now();
     ret = rknn_outputs_get(context, outputs_num, outputs, NULL);
+    auto outputs_get_end = std::chrono::high_resolution_clock::now();
 
     end = std::chrono::high_resolution_clock::now();
+    long long input_set_us = std::chrono::duration_cast<std::chrono::microseconds>(input_set_end - input_set_start).count();
+    long long rknn_run_us = std::chrono::duration_cast<std::chrono::microseconds>(run_end - run_start).count();
+    long long outputs_get_us = std::chrono::duration_cast<std::chrono::microseconds>(outputs_get_end - outputs_get_start).count();
     long long rknn_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
 
     // ------- 后处理 -------
@@ -287,14 +297,19 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
         qnt_scales.emplace_back(output_attrs[i].scale);
     }
 
+    post_process_timing_t post_timing;
     post_process((int8_t *)outputs[0].buf, (int8_t *)outputs[1].buf, (int8_t *)outputs[2].buf,
                  model_height, model_width, box_conf_threshold, nms_threshold,
-                 scale_w, scale_h, qnt_zps, qnt_scales, result_group);
+                 scale_w, scale_h, qnt_zps, qnt_scales, result_group, &post_timing);
     auto post_end = std::chrono::high_resolution_clock::now();
     long long postprocess_us = std::chrono::duration_cast<std::chrono::microseconds>(post_end - post_start).count();
 
     rknn_outputs_release(context, outputs_num, outputs);
     BenchmarkStats::instance().record_inference(preprocess_us, rknn_us, postprocess_us);
+    BenchmarkStats::instance().record_rknn_detail(input_set_us, rknn_run_us, outputs_get_us);
+    BenchmarkStats::instance().record_postprocess_detail(
+        post_timing.decode_us, post_timing.sort_us, post_timing.nms_us, post_timing.result_us,
+        post_timing.valid_count, post_timing.result_count);
 
     ret = 0;
     return ret;

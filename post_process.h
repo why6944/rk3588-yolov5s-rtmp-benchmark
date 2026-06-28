@@ -1,4 +1,4 @@
-﻿#ifndef POSTPROCESS_H
+#ifndef POSTPROCESS_H
 #define POSTPROCESS_H
 
 #include <stdint.h>
@@ -49,7 +49,17 @@ struct detect_result_group_t
     detect_result_t result[OBJ_NUM_MAX_SIZE];// 检测结果数组
 };  
 
+struct post_process_timing_t
+{
+    long long decode_us = 0;
+    long long sort_us = 0;
+    long long nms_us = 0;
+    long long result_us = 0;
+    int valid_count = 0;
+    int result_count = 0;
+};
+
 
 int post_process(int8_t *output0, int8_t *output1, int8_t *output2, int model_height, int model_width, float box_threshold,
-                 float nms_threshold, float scale_w, float scale_h, std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t& group);
+                 float nms_threshold, float scale_w, float scale_h, std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t& group, post_process_timing_t *timing = nullptr);
 #endif

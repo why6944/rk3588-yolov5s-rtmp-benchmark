@@ -15,12 +15,12 @@ public:
     ~SafeQueue(){};
 
     //插入队列
-    void enqueue(const T &t )
+    void enqueue(T t)
     {
         unique_lock<mutex> lock(m);
         cond_not_full.wait(lock, [this]{return q.size() < maxSize;});
-        
-        q.push(t);
+
+        q.push(std::move(t));
         cond_not_empty.notify_one();
     }
 
@@ -34,7 +34,7 @@ public:
             return false;
         }
         
-        t = q.front();
+        t = std::move(q.front());
         q.pop();
         
         cond_not_full.notify_one();

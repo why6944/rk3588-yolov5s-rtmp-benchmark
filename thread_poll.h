@@ -1,4 +1,4 @@
-﻿#ifndef THREADPOLL_H
+#ifndef THREADPOLL_H
 #define THREADPOLL_H
 
 #include <mutex>

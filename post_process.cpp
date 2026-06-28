@@ -7,6 +7,7 @@
 #include <map>
 #include <algorithm>
 #include <mutex>
+#include <chrono>
 
 using namespace std;
 
@@ -276,7 +277,7 @@ inline static int clamp(float val, int min, int max) { return val > min? (val < 
 int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
                  int model_height, int model_width, float box_threshold,
                  float nms_threshold, float scale_w, float scale_h,
-                 std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t &result_group)
+                 std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t &result_group, post_process_timing_t *timing)
 {
     // 1. 加载标签。post_process 会被多个 worker 同时调用，首次加载必须线程安全。
     static std::once_flag labels_once;
@@ -297,6 +298,8 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
     vector<float> detect_boxes;
     vector<float> objProbs;
     vector<int> classID;
+
+    auto decode_start = std::chrono::high_resolution_clock::now();
 
     // 处理第一个输出
     //cout << "第一个" << endl;
@@ -332,12 +335,19 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
     std::vector<int> indexArray;
 
     int validCount = validCount0 + validCount1 + validCount2;
+    auto decode_end = std::chrono::high_resolution_clock::now();
+    if (timing) {
+        timing->decode_us = std::chrono::duration_cast<std::chrono::microseconds>(decode_end - decode_start).count();
+        timing->valid_count = validCount;
+    }
     if (validCount < 0) {
         return 0;
     }
     //printf("jiacne:%d\n",validCount);
     
+    auto sort_start = std::chrono::high_resolution_clock::now();
     std::vector<ProbArray> prob_arr;    
+    prob_arr.reserve(validCount);
     for(int i = 0; i<validCount; i++)
     {
         ProbArray temp;
@@ -350,12 +360,19 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
     objProbs.clear();
     indexArray.clear();
 
+    objProbs.reserve(validCount);
+    indexArray.reserve(validCount);
     for (int i = 0; i < validCount; i++) {
         objProbs.emplace_back(prob_arr[i].conf);
         indexArray.emplace_back(prob_arr[i].index);
     }
+    auto sort_end = std::chrono::high_resolution_clock::now();
+    if (timing) {
+        timing->sort_us = std::chrono::duration_cast<std::chrono::microseconds>(sort_end - sort_start).count();
+    }
 
 
+    auto nms_start = std::chrono::high_resolution_clock::now();
     std::set<int> class_set(begin(classID),end(classID));
 
     for(const int& id : class_set)
@@ -368,7 +385,12 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
     {
         nms(validCount, detect_boxes, classID, indexArray, id, nms_threshold);
     }
+    auto nms_end = std::chrono::high_resolution_clock::now();
+    if (timing) {
+        timing->nms_us = std::chrono::duration_cast<std::chrono::microseconds>(nms_end - nms_start).count();
+    }
 
+    auto result_start = std::chrono::high_resolution_clock::now();
     int count = 0;
     result_group.box_count = 0;
     
@@ -404,6 +426,12 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
         count++;
         result_group.box_count = count;
     }
-   
+
+    if (timing) {
+        timing->result_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::high_resolution_clock::now() - result_start).count();
+        timing->result_count = count;
+    }
+
     return 0;
 }

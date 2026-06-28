@@ -1,4 +1,5 @@
 #include "thread_poll.h"
+#include "debug_log.h"
 
 ThreadPoll::ThreadPoll(const char* model_path, int num_threads, bool draw_results)
 {
@@ -9,7 +10,7 @@ ThreadPoll::ThreadPoll(const char* model_path, int num_threads, bool draw_result
 
 ThreadPoll::~ThreadPoll()
 {
-    std::cout << "Remaining tasks: " << tasks.size() << std::endl;
+    LOG_DEBUG("Remaining tasks: %zu\n", tasks.size());
 
     run_flag = false;
     condition.notify_all();
@@ -19,7 +20,7 @@ ThreadPoll::~ThreadPoll()
         if(t.joinable())
             t.join();
     }
-    std::cout << "ThreadPoll destroyed.\n";
+    LOG_DEBUG("ThreadPoll destroyed.\n");
 }
 
 void ThreadPoll::init(const char* model_path, int num_threads)
@@ -56,7 +57,7 @@ void ThreadPoll::worker(int id)
     //   这样 my_yolo 永远只有这一个 worker 在用，没有并发冲突。
     // -------------------------------------------------------
     std::shared_ptr<Yolov5s> my_yolo = yolo_group[id];  // 专属 yolo，真正被使用
-    std::cout << "worker线程启动, id=" << id << "\n";
+    LOG_DEBUG("worker线程启动, id=%d\n", id);
 
     while(run_flag)
     {
@@ -72,7 +73,7 @@ void ThreadPoll::worker(int id)
 
             if(!run_flag)
             {
-                std::cout << "worker " << id << " 下班！\n";
+                LOG_DEBUG("worker %d 下班！\n", id);
                 break;
             }
 
@@ -82,14 +83,14 @@ void ThreadPoll::worker(int id)
 
         if(current_task.valid())
         {
-            printf("worker %d get task！\r\n", id);
+            LOG_DEBUG("worker %d get task！\n", id);
             // [修改] 把自己的 my_yolo 作为参数注入任务
             // 原来是 current_task()，任务自己选 yolo
             // 现在是 current_task(my_yolo)，由 worker 决定用哪个 yolo
             current_task(my_yolo);
         }
     }
-    std::cout << "Worker " << id << " exited, remaining tasks: " << tasks.size() << std::endl;
+    LOG_DEBUG("Worker %d exited, remaining tasks: %zu\n", id, tasks.size());
 }
 
 std::future<ProcessResult> ThreadPoll::submit_task_async(int index, cv::Mat img)
@@ -114,19 +115,19 @@ std::future<ProcessResult> ThreadPoll::submit_task_async(int index, cv::Mat img)
     // -------------------------------------------------------
     bool draw_results = draw_results_;
     std::packaged_task<ProcessResult(std::shared_ptr<Yolov5s>)> task(
-        [index, img, draw_results](std::shared_ptr<Yolov5s> yolo) mutable
+        [index, img = std::move(img), draw_results](std::shared_ptr<Yolov5s> yolo) mutable
         {
             ProcessResult result;
             try
             {
-                printf("worker get task %d！\r\n", index);
+                LOG_DEBUG("worker get task %d！\n", index);
 
                 detect_result_group_t detections;
                 yolo->inference_image(img, detections);
                 if(draw_results)
                     yolo->draw_result(img, detections);
 
-                result.processed_img       = img;
+                result.processed_img       = std::move(img);
                 result.detection_results   = detections;
                 result.success             = true;
             }
@@ -143,7 +144,7 @@ std::future<ProcessResult> ThreadPoll::submit_task_async(int index, cv::Mat img)
     {
         std::unique_lock<std::mutex> lock(queue_mutex);
         tasks.emplace(std::move(task));
-        std::cout << "[submit_task_async] 已压入tasks队列, 现在大小=" << tasks.size() << std::endl;
+        LOG_DEBUG("[submit_task_async] 已压入tasks队列, 现在大小=%zu\n", tasks.size());
     }
     condition.notify_one();
     return future;
