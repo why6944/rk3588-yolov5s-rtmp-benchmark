@@ -51,14 +51,28 @@ enum class RunMode
     Snapshot
 };
 
+enum class InputSource
+{
+    Video,
+    Camera
+};
+
 struct RunOptions
 {
     int thread_count = 3;
     int loops = 900;
     RunMode mode = RunMode::Full;
+    InputSource input_source = InputSource::Video;
+    std::string video_path = "../video.mp4";
+    int camera_id = 0;
+    int camera_width = 1280;
+    int camera_height = 720;
+    int camera_fps = 30;
+    std::string camera_format = "MJPG";
     std::string rtmp_url = "rtmp://192.168.137.1:1935/live/app";
     int snapshot_frame = 120;
     std::string snapshot_output = "../debug_records/snapshot.png";
+    bool show_help = false;
 };
 
 static const char* modeName(RunMode mode)
@@ -73,6 +87,18 @@ static const char* modeName(RunMode mode)
     case RunMode::Snapshot:  return "snapshot";
     }
     return "full";
+}
+
+static const char* inputSourceName(InputSource source)
+{
+    return source == InputSource::Camera ? "camera" : "video";
+}
+
+static std::string runLabel(const RunOptions &options)
+{
+    if(options.input_source == InputSource::Video)
+        return modeName(options.mode);
+    return std::string(inputSourceName(options.input_source)) + "-" + modeName(options.mode);
 }
 
 static bool modeWritesAvi(RunMode mode)
@@ -105,12 +131,108 @@ static RunMode parseMode(const char *value)
     return RunMode::Full;
 }
 
+static InputSource parseInputSource(const char *value)
+{
+    if(std::strcmp(value, "camera") == 0 || std::strcmp(value, "cam") == 0)
+        return InputSource::Camera;
+    return InputSource::Video;
+}
+
+static int fourccFromString(const std::string &fmt)
+{
+    if(fmt.size() < 4)
+        return 0;
+    return cv::VideoWriter::fourcc(fmt[0], fmt[1], fmt[2], fmt[3]);
+}
+
+static void printUsage(const char *prog)
+{
+    std::cout
+        << "Usage: " << prog << " [options]\n"
+        << "  --mode full|infer-only|rknn-only|mpp-only|rtmp|snapshot\n"
+        << "  --input video|camera              default: video\n"
+        << "  --video-path PATH                 default: ../video.mp4\n"
+        << "  --camera-id N                     default: 0 (/dev/video0)\n"
+        << "  --camera-width W                  default: 1280\n"
+        << "  --camera-height H                 default: 720\n"
+        << "  --camera-fps FPS                  default: 30\n"
+        << "  --camera-format FOURCC            default: MJPG\n"
+        << "  --threads N                       default: 3\n"
+        << "  --loops N                         camera frames or rknn-only loops, default: 900\n"
+        << "  --box-threshold V --nms-threshold V\n"
+        << "  --rtmp-url URL\n";
+}
+
 static RunOptions parseOptions(int argc, char **argv)
 {
     RunOptions options;
     for(int i = 1; i < argc; ++i)
     {
-        if((std::strcmp(argv[i], "--threads") == 0 || std::strcmp(argv[i], "-t") == 0) && i + 1 < argc)
+        if(std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0)
+        {
+            options.show_help = true;
+        }
+        else if((std::strcmp(argv[i], "--input") == 0 || std::strcmp(argv[i], "--source") == 0) && i + 1 < argc)
+        {
+            options.input_source = parseInputSource(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--input=", 8) == 0)
+        {
+            options.input_source = parseInputSource(argv[i] + 8);
+        }
+        else if(std::strncmp(argv[i], "--source=", 9) == 0)
+        {
+            options.input_source = parseInputSource(argv[i] + 9);
+        }
+        else if((std::strcmp(argv[i], "--video-path") == 0 || std::strcmp(argv[i], "--video") == 0) && i + 1 < argc)
+        {
+            options.video_path = argv[++i];
+        }
+        else if(std::strncmp(argv[i], "--video-path=", 13) == 0)
+        {
+            options.video_path = argv[i] + 13;
+        }
+        else if(std::strcmp(argv[i], "--camera-id") == 0 && i + 1 < argc)
+        {
+            options.camera_id = std::atoi(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--camera-id=", 12) == 0)
+        {
+            options.camera_id = std::atoi(argv[i] + 12);
+        }
+        else if(std::strcmp(argv[i], "--camera-width") == 0 && i + 1 < argc)
+        {
+            options.camera_width = std::atoi(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--camera-width=", 15) == 0)
+        {
+            options.camera_width = std::atoi(argv[i] + 15);
+        }
+        else if(std::strcmp(argv[i], "--camera-height") == 0 && i + 1 < argc)
+        {
+            options.camera_height = std::atoi(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--camera-height=", 16) == 0)
+        {
+            options.camera_height = std::atoi(argv[i] + 16);
+        }
+        else if(std::strcmp(argv[i], "--camera-fps") == 0 && i + 1 < argc)
+        {
+            options.camera_fps = std::atoi(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--camera-fps=", 13) == 0)
+        {
+            options.camera_fps = std::atoi(argv[i] + 13);
+        }
+        else if(std::strcmp(argv[i], "--camera-format") == 0 && i + 1 < argc)
+        {
+            options.camera_format = argv[++i];
+        }
+        else if(std::strncmp(argv[i], "--camera-format=", 16) == 0)
+        {
+            options.camera_format = argv[i] + 16;
+        }
+        else if((std::strcmp(argv[i], "--threads") == 0 || std::strcmp(argv[i], "-t") == 0) && i + 1 < argc)
         {
             options.thread_count = std::atoi(argv[++i]);
         }
@@ -192,6 +314,38 @@ static RunOptions parseOptions(int argc, char **argv)
     return options;
 }
 
+static bool openInputCapture(const RunOptions &options, cv::VideoCapture &cap)
+{
+    if(options.input_source == InputSource::Video)
+    {
+        cap.open(options.video_path);
+        if(!cap.isOpened())
+            std::cerr << "Fail to open input video: " << options.video_path << "\n";
+        return cap.isOpened();
+    }
+
+    cap.open(options.camera_id, cv::CAP_V4L2);
+    if(!cap.isOpened())
+    {
+        std::cerr << "Fail to open camera: /dev/video" << options.camera_id << "\n";
+        return false;
+    }
+
+    int fourcc = fourccFromString(options.camera_format);
+    if(fourcc != 0)
+        cap.set(cv::CAP_PROP_FOURCC, fourcc);
+    cap.set(cv::CAP_PROP_FRAME_WIDTH, options.camera_width);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, options.camera_height);
+    cap.set(cv::CAP_PROP_FPS, options.camera_fps);
+    cap.set(cv::CAP_PROP_BUFFERSIZE, 4);
+
+    std::cout << "[Input] camera=/dev/video" << options.camera_id
+              << ", request=" << options.camera_width << "x" << options.camera_height
+              << "@" << options.camera_fps
+              << ", format=" << options.camera_format << std::endl;
+    return true;
+}
+
 static void ensureDebugDirs()
 {
     std::system("mkdir -p ../debug_records/csv ../debug_records/logs");
@@ -231,10 +385,10 @@ SafeQueue<FrameData> g_writeQueue(50);
 std::atomic<bool>    g_readFinish(false);
 std::atomic<bool>    g_processFinish(false);
 
-void readThreadFunc(cv::VideoCapture &cap)
+void readThreadFunc(cv::VideoCapture &cap, int max_frames)
 {
     int idx = 0;
-    while(true)
+    while(max_frames <= 0 || idx < max_frames)
     {
         cv::Mat frame;
         if(!cap.read(frame))
@@ -374,14 +528,11 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode)
     std::cerr << "[WriteThread] finished.\n";
 }
 
-static int runSnapshot(const RunOptions &options, const std::string &inPath)
+static int runSnapshot(const RunOptions &options)
 {
-    cv::VideoCapture cap(inPath);
-    if(!cap.isOpened())
-    {
-        std::cerr << "Fail to open input video: " << inPath << "\n";
+    cv::VideoCapture cap;
+    if(!openInputCapture(options, cap))
         return -1;
-    }
 
     cv::Mat frame;
     int idx = 0;
@@ -395,7 +546,7 @@ static int runSnapshot(const RunOptions &options, const std::string &inPath)
         idx++;
     }
 
-    BenchmarkStats::instance().reset(1, modeName(options.mode));
+    BenchmarkStats::instance().reset(1, runLabel(options));
     Yolov5s yolo("../model/yolov5s.rknn", 0);
     detect_result_group_t detections;
     yolo.inference_image(frame, detections);
@@ -415,14 +566,11 @@ static int runSnapshot(const RunOptions &options, const std::string &inPath)
     return 0;
 }
 
-static int runRknnOnly(const RunOptions &options, const std::string &inPath)
+static int runRknnOnly(const RunOptions &options)
 {
-    cv::VideoCapture cap(inPath);
-    if(!cap.isOpened())
-    {
-        std::cerr << "Fail to open input video: " << inPath << "\n";
+    cv::VideoCapture cap;
+    if(!openInputCapture(options, cap))
         return -1;
-    }
 
     cv::Mat frame;
     if(!cap.read(frame) || frame.empty())
@@ -436,7 +584,7 @@ static int runRknnOnly(const RunOptions &options, const std::string &inPath)
     for(int i = 0; i < options.thread_count; ++i)
         yolo_group.emplace_back(std::make_shared<Yolov5s>("../model/yolov5s.rknn", i % 3));
 
-    BenchmarkStats::instance().reset(options.thread_count, modeName(options.mode));
+    BenchmarkStats::instance().reset(options.thread_count, runLabel(options));
     PerfMonitor::instance().start("../debug_records/csv/perf_log.csv", 500);
 
     auto start = std::chrono::high_resolution_clock::now();
@@ -474,10 +622,18 @@ int main(int argc, char **argv)
 {
     ensureDebugDirs();
     RunOptions options = parseOptions(argc, argv);
-    std::string inPath  = "../video.mp4";
+    if(options.show_help)
+    {
+        printUsage(argv[0]);
+        return 0;
+    }
+
     std::string outPath = "../output.avi";
+    std::string label = runLabel(options);
 
     std::cout << "[Main] mode=" << modeName(options.mode)
+              << ", input=" << inputSourceName(options.input_source)
+              << ", label=" << label
               << ", thread_count=" << options.thread_count
               << ", loops=" << options.loops
               << ", verbose=" << g_verbose_log
@@ -488,19 +644,18 @@ int main(int argc, char **argv)
     std::cout << std::endl;
 
     if(options.mode == RunMode::Snapshot)
-        return runSnapshot(options, inPath);
+        return runSnapshot(options);
 
     if(options.mode == RunMode::RknnOnly)
-        return runRknnOnly(options, inPath);
+        return runRknnOnly(options);
 
-    BenchmarkStats::instance().reset(options.thread_count, modeName(options.mode));
+    BenchmarkStats::instance().reset(options.thread_count, label);
     auto start = std::chrono::high_resolution_clock::now();
     PerfMonitor::instance().start("../debug_records/csv/perf_log.csv", 500);
 
-    cv::VideoCapture cap(inPath);
-    if(!cap.isOpened())
+    cv::VideoCapture cap;
+    if(!openInputCapture(options, cap))
     {
-        std::cerr << "Fail to open input video: " << inPath << "\n";
         PerfMonitor::instance().stop();
         return -1;
     }
@@ -508,7 +663,10 @@ int main(int argc, char **argv)
     int    width  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
     int    height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
     double fps    = cap.get(cv::CAP_PROP_FPS);
-    if(fps < 1.0) fps = 25.0;
+    if(fps < 1.0) fps = options.input_source == InputSource::Camera ? options.camera_fps : 25.0;
+
+    std::cout << "[Input] actual=" << width << "x" << height
+              << "@" << fps << "fps" << std::endl;
 
     int hor_stride = ALIGN(width, 16);
     int ver_stride = ALIGN(height, 16);
@@ -550,7 +708,8 @@ int main(int argc, char **argv)
     bool draw_results = modeDrawsResults(options.mode);
     ThreadPoll npu_pool("../model/yolov5s.rknn", options.thread_count, draw_results);
 
-    std::thread tRead(readThreadFunc, std::ref(cap));
+    int max_read_frames = options.input_source == InputSource::Camera ? options.loops : 0;
+    std::thread tRead(readThreadFunc, std::ref(cap), max_read_frames);
     std::thread tAggregator(aggregatorThreadFunc, std::ref(npu_pool));
     std::thread tWrite(writeThreadFunc, writer.get(), options.mode);
 

@@ -55,6 +55,9 @@ static _Bool process_image(uint8_t *p, int size, MppContext *mpp_enc_data);
 MppContext * alloc_mpp_context()
 {
     MppContext *ctx = (MppContext *)malloc(sizeof(MppContext));
+    if (!ctx)
+        return NULL;
+    memset(ctx, 0, sizeof(MppContext));
     ctx->init_mpp = init_mpp;
     ctx->close = mpp_close;
     ctx->get_header = get_header;
