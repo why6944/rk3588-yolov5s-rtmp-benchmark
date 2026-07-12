@@ -100,9 +100,11 @@ V4L2_BUFFER_COUNT=8 ./app --mode mpp-only --input camera \
 | 纯 RKNN 吞吐 | 6 worker、三核 NPU、固定输入 | 约 111 FPS |
 | 1080p 视频 + MPP | 视频文件输入、检测后 H.264 硬编码 | 约 62 FPS |
 | 1080p 视频 + RTMP | 视频文件输入、H.264 编码与推流 | 约 56 FPS |
-| Camera DMA-BUF 对比 | 640x480 YUYV@30、6 worker、MPP-only | 端到端约 14.8 FPS |
+| Camera DMA-BUF + fd | 640x480 YUYV@30、6 worker、MPP-only、正常运行 | 端到端约 27.8 FPS |
 
-在最后一组公平对照中，`v4l2-mmap + RKNN copy` 与 `DMA-BUF + RKNN fd` 的端到端 FPS 基本相同，但 DMA-BUF + fd 使每帧 `task-clock` 降低约 11.3%、CPU cycles 降低约 10.7%、instructions 降低约 12.0%，并将逐帧 `rknn_input_set` 从约 1.0 ms 降至 0。
+Camera 端到端吞吐应以未挂 profiler 的正常运行数据为准。一次 600 帧复测中，OpenCV baseline 为 28.380 FPS，DMA-BUF + RKNN fd 为 27.840 FPS；两者吞吐接近。`perf stat` 下曾观测到约 14.8 FPS，这是分析工具与 V4L2 路径组合产生的扰动数据，仅用于观察 CPU 计数器，不作为正常性能结论。
+
+在 `perf stat` 的公平对照中，`v4l2-mmap + RKNN copy` 与 `DMA-BUF + RKNN fd` 的每帧 CPU 工作量存在差异：DMA-BUF + fd 的 `task-clock` 降低约 11.3%、CPU cycles 降低约 10.7%、instructions 降低约 12.0%，并将逐帧 `rknn_input_set` 从约 1.0 ms 降至 0。该结果说明 DMA-BUF 主要降低 CPU 输入开销，而当前 Camera FPS 仍受采集 buffer 生命周期和完整输出链路约束。
 
 完整的 perf 使用方法、计数器解释与调试过程见 [docs/RK3588_perf性能分析教学调试文档.md](docs/RK3588_perf性能分析教学调试文档.md)。
 
