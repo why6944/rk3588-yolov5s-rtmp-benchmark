@@ -1,3 +1,128 @@
+# RK3588 边缘视频流 AI 分析网关
+
+基于 Orange Pi 5 Pro / RK3588 的边缘侧视频分析项目：从视频文件或 USB 摄像头采集图像，运行 INT8 量化的 YOLOv5s 检测，完成检测框绘制、MPP H.264 硬编码与 RTMP 推流。
+
+## 架构
+
+```mermaid
+flowchart LR
+    A[视频文件 / USB Camera] --> B[输入线程]
+    B --> C{输入后端}
+    C -->|OpenCV| D[BGR Mat]
+    C -->|V4L2 mmap / DMA-BUF| E[YUYV Camera Buffer]
+    D --> F[RGA 预处理]
+    E --> F
+    F --> G[RKNN Runtime / 三核 NPU]
+    G --> H[CPU 后处理与 NMS]
+    H --> I[保序聚合]
+    I --> J[MPP H.264 编码]
+    J --> K[RTMP 推流]
+```
+
+Camera 的 DMA-BUF 输入链路为：
+
+```text
+V4L2 DQBUF -> VIDIOC_EXPBUF -> camera_fd -> RGA YUYV->RGB/resize
+-> RKNN rknn_create_mem_from_fd + rknn_set_io_mem -> NPU
+```
+
+输出侧的检测框目前仍由 OpenCV 在 CPU 上绘制；之后由 RGA 转换为 NV12，再交给 MPP 编码。
+
+## 功能与运行模式
+
+| 模式 | 行为 |
+| --- | --- |
+| `full` | 推理、画框、写 `output.avi`，并执行 MPP 路径 |
+| `infer-only` | 输入、预处理、RKNN 推理、后处理，不编码输出 |
+| `rknn-only` | 固定输入循环调用 RKNN，用于测试纯推理吞吐 |
+| `mpp-only` | 推理、画框、RGA NV12 转换、MPP H.264 编码，不写 AVI、不推流 |
+| `rtmp` | 在 `mpp-only` 基础上将 H.264 包封装为 FLV 并推送 RTMP |
+| `snapshot` | 导出指定帧的检测结果图片 |
+
+Camera 输入后端：
+
+| 参数 | 路径 | 用途 |
+| --- | --- | --- |
+| `opencv` | Camera -> OpenCV BGR Mat -> RGA | 兼容旧路径 |
+| `v4l2-mmap` | V4L2 mmap YUYV -> RGA virtual address -> RKNN copy | 公平性能 baseline |
+| `dmabuf` | V4L2 YUYV -> DMA-BUF fd -> RGA fd -> RKNN fd | 降低 CPU 输入开销 |
+
+## 编译与运行
+
+在 `Desktop` 目录执行：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j4
+
+export LD_LIBRARY_PATH="$PWD/3rdparty/librknn_api/aarch64:$PWD/3rdparty/rga/RK3588/lib/Linux/aarch64:$LD_LIBRARY_PATH"
+cd build
+```
+
+视频输入、MPP 编码：
+
+```bash
+./app --mode mpp-only --input video --video-path ../video.mp4 \
+  --threads 6 --box-threshold 0.6 --nms-threshold 0.5 \
+  --rknn-input-mode fd --rknn-output-mode copy --mpp-input-mode copy
+```
+
+USB 摄像头 DMA-BUF 输入：
+
+```bash
+V4L2_BUFFER_COUNT=8 ./app --mode mpp-only --input camera \
+  --camera-id 0 --camera-width 640 --camera-height 480 \
+  --camera-fps 30 --camera-format YUYV --threads 6 \
+  --input-backend dmabuf --rknn-input-mode fd \
+  --rknn-output-mode copy --mpp-input-mode copy
+```
+
+重新插拔摄像头后，设备节点可能从 `/dev/video0` 变化为 `/dev/video1`。运行前可用 `v4l2-ctl --list-devices` 确认并调整 `--camera-id`。
+
+## DMA-BUF 优化
+
+大尺寸图像帧在 Camera、RGA、RKNN、MPP 之间流转时，普通 CPU `memcpy` 会占用 CPU 时间并消耗 DDR 带宽。本项目使用 DMA-BUF fd 传递可被硬件访问的 buffer：
+
+- Camera 通过 `VIDIOC_EXPBUF` 导出 V4L2 buffer 的 DMA-BUF fd；
+- RGA 通过 `importbuffer_fd(camera_fd)` 直接读取 YUYV 原始帧；
+- 640x640 RGB 模型输入由 dma-heap 分配，RKNN 通过 `rknn_create_mem_from_fd` 和 `rknn_set_io_mem` 预绑定；
+- MPP 支持外部 NV12 DMA-BUF 作为编码输入；
+- `FrameData` 持有 buffer 生命周期引用，worker 完成后才 QBUF 归还 Camera buffer。
+
+这不是“CPU 完全不参与”，CPU 仍负责任务调度、cache sync、后处理和画框。优化目标是减少大块帧数据的 CPU 复制和重复输入设置。
+
+## 性能结果
+
+性能必须结合输入和输出条件理解：
+
+| 场景 | 条件 | 结果 |
+| --- | --- | --- |
+| 纯 RKNN 吞吐 | 6 worker、三核 NPU、固定输入 | 约 111 FPS |
+| 1080p 视频 + MPP | 视频文件输入、检测后 H.264 硬编码 | 约 62 FPS |
+| 1080p 视频 + RTMP | 视频文件输入、H.264 编码与推流 | 约 56 FPS |
+| Camera DMA-BUF 对比 | 640x480 YUYV@30、6 worker、MPP-only | 端到端约 14.8 FPS |
+
+在最后一组公平对照中，`v4l2-mmap + RKNN copy` 与 `DMA-BUF + RKNN fd` 的端到端 FPS 基本相同，但 DMA-BUF + fd 使每帧 `task-clock` 降低约 11.3%、CPU cycles 降低约 10.7%、instructions 降低约 12.0%，并将逐帧 `rknn_input_set` 从约 1.0 ms 降至 0。
+
+完整的 perf 使用方法、计数器解释与调试过程见 [docs/RK3588_perf性能分析教学调试文档.md](docs/RK3588_perf性能分析教学调试文档.md)。
+
+## 目录说明
+
+```text
+Desktop/
+├── main.cpp                 # 命令行、输入/聚合/写线程编排
+├── camera_dmabuf.*          # V4L2 mmap 与 Camera DMA-BUF 采集
+├── frame_data.h             # 帧数据与 Camera buffer 生命周期
+├── yolov5s.*                # RGA 预处理、RKNN 推理、后处理、画框
+├── thread_poll.*            # 多 context worker 线程池
+├── mpp.* / streamer.*       # MPP H.264 编码与 RTMP 输出
+├── benchmark_stats.*        # 阶段耗时与 CSV 性能统计
+├── debug_records/           # 本地运行日志、CSV、perf 数据，不提交
+└── docs/                    # 调试与教学文档
+```
+
+---
+
 # 代码问题深度讲解
 
 ## 在开始之前，先建立一个基本认知
