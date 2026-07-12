@@ -89,9 +89,12 @@ typedef struct MppContext {
 
         // 输入/输出缓冲区
         MppBufferGroup buf_grp;  ///< 缓冲区组
-        MppBuffer frm_buf;       ///< 帧缓冲区
+        MppBuffer frm_buf;       ///< 内部分配的帧缓冲区（copy路径使用）
         MppBuffer pkt_buf;       ///< 包缓冲区
         MppBuffer md_info;
+        MppBuffer ext_frm_buf;   ///< 外部DMA-BUF导入的帧缓冲区（fd路径使用）
+        int ext_frm_fd;          ///< 当前导入的外部DMA-BUF fd
+        int ext_frm_size;        ///< 当前导入的外部DMA-BUF大小
         MppEncSeiMode sei_mode;  ///< SEI模式
         MppEncHeaderMode header_mode;
 
@@ -138,7 +141,8 @@ typedef struct MppContext {
         // 回调函数
         int (*write_frame)(uint8_t*data,int size);  ///< 写入编码后帧数据的回调函数
         int (*init_mpp)(struct MppContext *mpp_enc_data);        ///< 初始化MPP的回调函数
-        _Bool (*process_image)(uint8_t *p, int size, struct MppContext *mpp_enc_data);  ///< 处理图像的回调函数
+        _Bool (*process_image)(uint8_t *p, int size, struct MppContext *mpp_enc_data);  ///< 处理图像的回调函数（copy路径）
+        _Bool (*process_image_fd)(int dma_fd, int size, struct MppContext *mpp_enc_data);  ///< 处理外部DMA-BUF图像（fd路径）
         _Bool (*get_header)(struct MppContext *mpp_enc_data,SpsHeader *sps_header);  ///< 获取头信息的回调函数
         void (*close)(struct MppContext* ctx);                   ///< 关闭MPP的回调函数
 

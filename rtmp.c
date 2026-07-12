@@ -8,7 +8,6 @@
 #include "rtmp.h"
 #include <unistd.h>
 
-static AVPacket pkt;
 static AVFormatContext *ofmt_ctx = NULL;
 static AVStream *video_stream = NULL;
 static int frame_index = 0;
@@ -25,18 +24,25 @@ int write_frame(uint8_t *data, int size)
 {
         if (!ofmt_ctx || !video_stream) return -1;
 
-        av_init_packet(&pkt);
-        pkt.size = size;
-        pkt.data = data;
+        AVPacket pkt = {0};
+        int ret = av_new_packet(&pkt, size);
+        if (ret < 0) return -1;
+        memcpy(pkt.data, data, size);
+
         pkt.stream_index = video_stream->index;
         pkt.pts = av_rescale_q(frame_index, (AVRational){1, stream_fps}, video_stream->time_base);
         pkt.dts = pkt.pts;
-        pkt.duration = av_rescale_q(1, (AVRational){1, stream_fps}, video_stream->time_base);
-        pkt.flags = AV_PKT_FLAG_KEY;
+
+        if (frame_index == 0)
+                pkt.flags |= AV_PKT_FLAG_KEY;
+
         frame_index++;
 
-        if (av_write_frame(ofmt_ctx, &pkt) < 0) {
-                printf("Error muxing packet\n");
+        ret = av_write_frame(ofmt_ctx, &pkt);
+        av_packet_unref(&pkt);
+
+        if (ret < 0) {
+                printf("Error muxing packet, ret=%d\n", ret);
                 return -1;
         }
         return 0;
@@ -152,8 +158,11 @@ int init_rtmp_streamer(char *stream, RtmpContext *config)
         return 0;
 
 end:
-        fflush(stdout);
         (void)url_opened;
+        if (ofmt_ctx && url_opened && !(ofmt_ctx->oformat->flags & AVFMT_NOFILE))
+                avio_closep(&ofmt_ctx->pb);
+        if (ofmt_ctx)
+                avformat_free_context(ofmt_ctx);
         ofmt_ctx = NULL;
         video_stream = NULL;
         printf("RTMP初始化失败，已清理资源\n");

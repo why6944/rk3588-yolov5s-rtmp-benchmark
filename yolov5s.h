@@ -8,6 +8,7 @@
 
 #include <string.h>
 #include <vector>
+#include <stdint.h>
 #include "3rdparty/librknn_api/include/rknn_api.h"
 
 #include "RgaUtils.h"
@@ -15,6 +16,7 @@
 #include "rga.h"
 
 #include "post_process.h"
+#include "frame_data.h"
 
 using namespace std;
 using namespace cv;
@@ -22,8 +24,8 @@ using namespace cv;
 class Yolov5s
 {
 private:
-    rknn_context context;
-    unsigned int model_size;
+    rknn_context context = 0;
+    unsigned int model_size = 0;
 
     rknn_tensor_attr input_tensor;
     rknn_tensor_attr output_tensor;
@@ -32,7 +34,7 @@ private:
     vector<rknn_tensor_attr> input_attrs;
     vector<rknn_tensor_attr> output_attrs;
 
-    unsigned char *model_data;
+    unsigned char *model_data = nullptr;
     unsigned char *load_model(const char* model_path, unsigned int &model_size);
 
     // -------------------------------------------------------
@@ -55,8 +57,21 @@ private:
     rga_buffer_handle_t rga_src_handle_     = 0;      // 原图的 RGA 内核句柄
     rga_buffer_handle_t rga_src_cvt_handle_ = 0;      // 颜色转换后的 RGA 内核句柄
     rga_buffer_handle_t rga_dst_handle_     = 0;      // 缩放后的 RGA 内核句柄
+    int                 rga_dst_dma_fd_     = -1;     // fd 模式下的模型输入 DMA-BUF
+    uint32_t            rga_dst_size_       = 0;      // 模型输入缓冲区大小
+    rknn_tensor_mem    *rknn_input_mem_     = nullptr;
+    rknn_tensor_attr    rknn_input_mem_attr_{};
+    bool                rknn_input_fd_enabled_ = false;
+    std::vector<void*>    rknn_output_prealloc_bufs_;
+    std::vector<uint32_t> rknn_output_prealloc_sizes_;
+    bool                  rknn_output_mem_enabled_ = false;
     int                 rga_cached_img_w_   = 0;      // 已分配的原图宽（用于判断是否要重新分配）
     int                 rga_cached_img_h_   = 0;      // 已分配的原图高
+
+    bool init_rknn_input_fd_buffer(int dst_size);
+    bool init_rknn_output_mem_buffers();
+    void release_rknn_output_mem_buffers();
+    int inference_camera_dmabuf_yuyv(const DmaBufFrameRef &frame_ref, detect_result_group_t &result_group);
 
     // 首帧或分辨率变化时调用，分配 src 相关缓冲区
     void ensure_src_buffers(int img_w, int img_h, int img_c);
@@ -66,7 +81,10 @@ private:
 
 public:
     Yolov5s(const char* model_path, int npu_index);
+    Yolov5s(const char* model_path, int npu_index, rknn_context* shared_context);
     ~Yolov5s();
+
+    rknn_context* get_context_ptr();
 
     int model_height;
     int model_width;
@@ -77,6 +95,7 @@ public:
     int img_channel;
 
     int inference_image(const Mat &origin_img, detect_result_group_t &result_group);
+    int inference_frame(FrameData &frame_data, detect_result_group_t &result_group);
     int benchmark_rknn_only(const Mat &origin_img, int loops);
     int draw_result(cv::Mat &orig_img, detect_result_group_t &group);
 };

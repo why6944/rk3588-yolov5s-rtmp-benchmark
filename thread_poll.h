@@ -14,12 +14,13 @@
 #include <exception>
 
 #include "yolov5s.h"
+#include "frame_data.h"
 
 using namespace std;
 using namespace cv;
 
 struct ProcessResult {
-    cv::Mat processed_img;
+    FrameData frame_data;
     detect_result_group_t detection_results;
     bool success = false;
     std::string error_msg;
@@ -31,7 +32,7 @@ public:
     ThreadPoll(const char* model_path, int num_threads, bool draw_results = true);
     ~ThreadPoll();
 
-    std::future<ProcessResult> submit_task_async(int index, cv::Mat img);
+    std::future<ProcessResult> submit_task_async(FrameData frame_data);
 
 private:
     void worker(int id);

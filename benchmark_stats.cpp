@@ -21,6 +21,9 @@ void BenchmarkStats::reset(int thread_count, const std::string& mode)
     preprocess_us_ = 0;
     rknn_us_ = 0;
     postprocess_us_ = 0;
+    pre_copy_us_ = 0;
+    pre_color_us_ = 0;
+    pre_resize_us_ = 0;
     rknn_input_set_us_ = 0;
     rknn_run_us_ = 0;
     rknn_outputs_get_us_ = 0;
@@ -50,6 +53,13 @@ void BenchmarkStats::record_inference(long long preprocess_us, long long rknn_us
     preprocess_us_ += preprocess_us;
     rknn_us_ += rknn_us;
     postprocess_us_ += postprocess_us;
+}
+
+void BenchmarkStats::record_preprocess_detail(long long copy_us, long long color_us, long long resize_us)
+{
+    pre_copy_us_ += copy_us;
+    pre_color_us_ += color_us;
+    pre_resize_us_ += resize_us;
 }
 
 void BenchmarkStats::record_rknn_detail(long long input_set_us, long long run_us, long long outputs_get_us)
@@ -114,7 +124,10 @@ void BenchmarkStats::print_summary() const
               << ", write_avi=" << avg_ms(write_us_.load(), write_frames_.load())
               << ", mpp_path=" << avg_ms(mpp_us_.load(), mpp_frames_.load())
               << std::endl;
-    std::cout << "[BenchmarkDetail] avg_ms rknn_input_set=" << avg_ms(rknn_input_set_us_.load(), frames)
+    std::cout << "[BenchmarkDetail] avg_ms pre_copy=" << avg_ms(pre_copy_us_.load(), frames)
+              << ", pre_color=" << avg_ms(pre_color_us_.load(), frames)
+              << ", pre_resize=" << avg_ms(pre_resize_us_.load(), frames)
+              << ", rknn_input_set=" << avg_ms(rknn_input_set_us_.load(), frames)
               << ", rknn_run=" << avg_ms(rknn_run_us_.load(), frames)
               << ", outputs_get=" << avg_ms(rknn_outputs_get_us_.load(), frames)
               << ", post_decode=" << avg_ms(post_decode_us_.load(), frames)
@@ -188,6 +201,7 @@ bool BenchmarkStats::append_detail_csv(const std::string& path) const
     if (need_header) {
         ofs << "threads,mode,frames,elapsed_ms,end_to_end_fps,"
             << "preprocess_avg_ms,rknn_avg_ms,postprocess_avg_ms,draw_avg_ms,write_avi_avg_ms,mpp_path_avg_ms,"
+            << "pre_copy_avg_ms,pre_color_avg_ms,pre_resize_avg_ms,"
             << "rknn_input_set_avg_ms,rknn_run_avg_ms,rknn_outputs_get_avg_ms,"
             << "post_decode_avg_ms,post_sort_avg_ms,post_nms_avg_ms,post_result_avg_ms,"
             << "valid_candidates_avg,result_boxes_avg\n";
@@ -210,6 +224,9 @@ bool BenchmarkStats::append_detail_csv(const std::string& path) const
         << avg_ms(draw_us_.load(), draw_frames_.load()) << ','
         << avg_ms(write_us_.load(), write_frames_.load()) << ','
         << avg_ms(mpp_us_.load(), mpp_frames_.load()) << ','
+        << avg_ms(pre_copy_us_.load(), frames) << ','
+        << avg_ms(pre_color_us_.load(), frames) << ','
+        << avg_ms(pre_resize_us_.load(), frames) << ','
         << avg_ms(rknn_input_set_us_.load(), frames) << ','
         << avg_ms(rknn_run_us_.load(), frames) << ','
         << avg_ms(rknn_outputs_get_us_.load(), frames) << ','

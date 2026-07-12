@@ -114,13 +114,41 @@ int process_frame(uint8_t *frame_data, int frame_size) {
         return -1;
     }
 
-    // 使用MPP进行编码
+    // 使用MPP进行编码（copy路径）
     if (!g_streamer_ctx.mpp_ctx->process_image(frame_data, frame_size, g_streamer_ctx.mpp_ctx)) {
         printf("Failed to process frame\n");
         return -1;
     }
 
     return 0;
+}
+
+int process_frame_fd(int dma_fd, int frame_size) {
+    if (!g_streamer_ctx.mpp_ctx || !g_streamer_ctx.mpp_ctx->process_image_fd) {
+        return -1;
+    }
+
+    // 使用MPP进行编码（外部DMA-BUF fd路径）
+    if (!g_streamer_ctx.mpp_ctx->process_image_fd(dma_fd, frame_size, g_streamer_ctx.mpp_ctx)) {
+        printf("Failed to process dma-buf frame\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+
+void release_frame_fd() {
+    if (!g_streamer_ctx.mpp_ctx) {
+        return;
+    }
+
+    if (g_streamer_ctx.mpp_ctx->ext_frm_buf) {
+        mpp_buffer_put(g_streamer_ctx.mpp_ctx->ext_frm_buf);
+        g_streamer_ctx.mpp_ctx->ext_frm_buf = NULL;
+        g_streamer_ctx.mpp_ctx->ext_frm_fd = -1;
+        g_streamer_ctx.mpp_ctx->ext_frm_size = 0;
+    }
 }
 
 void close_streamer() {

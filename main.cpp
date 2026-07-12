@@ -14,6 +14,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 #include "SafeQueue.h"
 #include "yolov5s.h"
@@ -22,6 +26,8 @@
 #include "perf_monitor.h"
 #include "benchmark_stats.h"
 #include "debug_log.h"
+#include "camera_dmabuf.h"
+#include "frame_data.h"
 
 #include "rga.h"
 #include "drmrga.h"
@@ -29,6 +35,21 @@
 #include "RgaUtils.h"
 
 #define ALIGN(x, a) (((x)+(a)-1)&~((a)-1))
+
+#ifndef DMA_HEAP_IOC_MAGIC
+#define DMA_HEAP_IOC_MAGIC 'H'
+#endif
+
+struct dma_heap_allocation_data_local {
+    uint64_t len;
+    uint32_t fd;
+    uint32_t fd_flags;
+    uint64_t heap_flags;
+};
+
+#ifndef DMA_HEAP_IOCTL_ALLOC
+#define DMA_HEAP_IOCTL_ALLOC _IOWR(DMA_HEAP_IOC_MAGIC, 0x0, struct dma_heap_allocation_data_local)
+#endif
 
 int g_width      = 0;
 int g_height     = 0;
@@ -39,6 +60,9 @@ extern "C" {
 int g_verbose_log = 0;
 float g_box_threshold = BOX_THRESHOLD;
 float g_nms_threshold = NMS_THRESHOLD;
+int g_rknn_input_fd_mode = 0;
+int g_rknn_output_mem_mode = 0;
+int g_mpp_input_fd_mode = 0;
 }
 
 enum class RunMode
@@ -57,12 +81,20 @@ enum class InputSource
     Camera
 };
 
+enum class InputBackend
+{
+    OpenCV,
+    V4L2Mmap,
+    DmaBuf
+};
+
 struct RunOptions
 {
     int thread_count = 3;
     int loops = 900;
     RunMode mode = RunMode::Full;
     InputSource input_source = InputSource::Video;
+    InputBackend input_backend = InputBackend::OpenCV;
     std::string video_path = "../video.mp4";
     int camera_id = 0;
     int camera_width = 1280;
@@ -94,11 +126,32 @@ static const char* inputSourceName(InputSource source)
     return source == InputSource::Camera ? "camera" : "video";
 }
 
+static const char* inputBackendName(InputBackend backend)
+{
+    if(backend == InputBackend::DmaBuf) return "dmabuf";
+    if(backend == InputBackend::V4L2Mmap) return "v4l2-mmap";
+    return "opencv";
+}
+
 static std::string runLabel(const RunOptions &options)
 {
+    std::string label;
     if(options.input_source == InputSource::Video)
-        return modeName(options.mode);
-    return std::string(inputSourceName(options.input_source)) + "-" + modeName(options.mode);
+        label = modeName(options.mode);
+    else
+        label = std::string(inputSourceName(options.input_source)) + "-" + modeName(options.mode);
+
+    if(options.input_source == InputSource::Camera && options.input_backend == InputBackend::DmaBuf)
+        label += "-camfd";
+    else if(options.input_source == InputSource::Camera && options.input_backend == InputBackend::V4L2Mmap)
+        label += "-cammmap";
+    if(g_rknn_input_fd_mode)
+        label += "-rknnfd";
+    if(g_rknn_output_mem_mode)
+        label += "-rknnoutmem";
+    if(g_mpp_input_fd_mode && (options.mode == RunMode::Full || options.mode == RunMode::MppOnly || options.mode == RunMode::Rtmp))
+        label += "-mppfd";
+    return label;
 }
 
 static bool modeWritesAvi(RunMode mode)
@@ -138,6 +191,16 @@ static InputSource parseInputSource(const char *value)
     return InputSource::Video;
 }
 
+static InputBackend parseInputBackend(const char *value)
+{
+    if(std::strcmp(value, "v4l2-mmap") == 0 || std::strcmp(value, "mmap") == 0)
+        return InputBackend::V4L2Mmap;
+    if(std::strcmp(value, "dmabuf") == 0 || std::strcmp(value, "dma") == 0 ||
+       std::strcmp(value, "v4l2-dmabuf") == 0 || std::strcmp(value, "v4l2") == 0)
+        return InputBackend::DmaBuf;
+    return InputBackend::OpenCV;
+}
+
 static int fourccFromString(const std::string &fmt)
 {
     if(fmt.size() < 4)
@@ -151,6 +214,8 @@ static void printUsage(const char *prog)
         << "Usage: " << prog << " [options]\n"
         << "  --mode full|infer-only|rknn-only|mpp-only|rtmp|snapshot\n"
         << "  --input video|camera              default: video\n"
+        << "  --input-backend opencv|v4l2-mmap|dmabuf\n"
+        << "                                      camera only, default: opencv\n"
         << "  --video-path PATH                 default: ../video.mp4\n"
         << "  --camera-id N                     default: 0 (/dev/video0)\n"
         << "  --camera-width W                  default: 1280\n"
@@ -160,6 +225,9 @@ static void printUsage(const char *prog)
         << "  --threads N                       default: 3\n"
         << "  --loops N                         camera frames or rknn-only loops, default: 900\n"
         << "  --box-threshold V --nms-threshold V\n"
+        << "  --rknn-input-mode copy|fd         default: copy\n"
+        << "  --rknn-output-mode copy|mem       default: copy\n"
+        << "  --mpp-input-mode copy|fd          default: copy\n"
         << "  --rtmp-url URL\n";
 }
 
@@ -183,6 +251,14 @@ static RunOptions parseOptions(int argc, char **argv)
         else if(std::strncmp(argv[i], "--source=", 9) == 0)
         {
             options.input_source = parseInputSource(argv[i] + 9);
+        }
+        else if(std::strcmp(argv[i], "--input-backend") == 0 && i + 1 < argc)
+        {
+            options.input_backend = parseInputBackend(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--input-backend=", 16) == 0)
+        {
+            options.input_backend = parseInputBackend(argv[i] + 16);
         }
         else if((std::strcmp(argv[i], "--video-path") == 0 || std::strcmp(argv[i], "--video") == 0) && i + 1 < argc)
         {
@@ -280,6 +356,36 @@ static RunOptions parseOptions(int argc, char **argv)
         {
             g_nms_threshold = std::atof(argv[i] + 16);
         }
+        else if(std::strcmp(argv[i], "--rknn-input-mode") == 0 && i + 1 < argc)
+        {
+            const char *mode = argv[++i];
+            g_rknn_input_fd_mode = (std::strcmp(mode, "fd") == 0 || std::strcmp(mode, "dma") == 0) ? 1 : 0;
+        }
+        else if(std::strncmp(argv[i], "--rknn-input-mode=", 18) == 0)
+        {
+            const char *mode = argv[i] + 18;
+            g_rknn_input_fd_mode = (std::strcmp(mode, "fd") == 0 || std::strcmp(mode, "dma") == 0) ? 1 : 0;
+        }
+        else if(std::strcmp(argv[i], "--rknn-output-mode") == 0 && i + 1 < argc)
+        {
+            const char *mode = argv[++i];
+            g_rknn_output_mem_mode = (std::strcmp(mode, "mem") == 0 || std::strcmp(mode, "dma") == 0 || std::strcmp(mode, "fd") == 0) ? 1 : 0;
+        }
+        else if(std::strncmp(argv[i], "--rknn-output-mode=", 19) == 0)
+        {
+            const char *mode = argv[i] + 19;
+            g_rknn_output_mem_mode = (std::strcmp(mode, "mem") == 0 || std::strcmp(mode, "dma") == 0 || std::strcmp(mode, "fd") == 0) ? 1 : 0;
+        }
+        else if(std::strcmp(argv[i], "--mpp-input-mode") == 0 && i + 1 < argc)
+        {
+            const char *mode = argv[++i];
+            g_mpp_input_fd_mode = (std::strcmp(mode, "fd") == 0 || std::strcmp(mode, "dma") == 0) ? 1 : 0;
+        }
+        else if(std::strncmp(argv[i], "--mpp-input-mode=", 17) == 0)
+        {
+            const char *mode = argv[i] + 17;
+            g_mpp_input_fd_mode = (std::strcmp(mode, "fd") == 0 || std::strcmp(mode, "dma") == 0) ? 1 : 0;
+        }
         else if(std::strcmp(argv[i], "--rtmp-url") == 0 && i + 1 < argc)
         {
             options.rtmp_url = argv[++i];
@@ -346,12 +452,45 @@ static bool openInputCapture(const RunOptions &options, cv::VideoCapture &cap)
     return true;
 }
 
+
+static int allocateDmaHeapFd(size_t size, std::string *heap_path = nullptr)
+{
+    const char *heap_paths[] = {
+        "/dev/dma_heap/system-uncached",
+        "/dev/dma_heap/cma-uncached",
+        "/dev/dma_heap/system",
+        "/dev/dma_heap/cma"
+    };
+
+    for(const char *path : heap_paths)
+    {
+        int heap_fd = open(path, O_RDWR | O_CLOEXEC);
+        if(heap_fd < 0)
+            continue;
+
+        dma_heap_allocation_data_local data;
+        std::memset(&data, 0, sizeof(data));
+        data.len = size;
+        data.fd_flags = O_RDWR | O_CLOEXEC;
+        data.heap_flags = 0;
+        if(ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &data) == 0)
+        {
+            close(heap_fd);
+            if(heap_path)
+                *heap_path = path;
+            return static_cast<int>(data.fd);
+        }
+        close(heap_fd);
+    }
+    return -1;
+}
+
 static void ensureDebugDirs()
 {
     std::system("mkdir -p ../debug_records/csv ../debug_records/logs");
 }
 
-void BGR_to_NV12_with_RGA(
+bool BGR_to_NV12_with_RGA(
     const uint8_t       *bgr_src,
     char                *bgr_buf,
     rga_buffer_handle_t  bgr_handle,
@@ -359,6 +498,10 @@ void BGR_to_NV12_with_RGA(
     rga_buffer_handle_t  nv12_handle,
     int width, int height)
 {
+    (void)nv12_buf;
+    if(!bgr_src || !bgr_buf || bgr_handle == 0 || nv12_handle == 0)
+        return false;
+
     memcpy(bgr_buf, bgr_src, width * height * 3);
 
     rga_buffer_t src = wrapbuffer_handle(bgr_handle,  width,        height,        RK_FORMAT_RGB_888);
@@ -366,19 +509,22 @@ void BGR_to_NV12_with_RGA(
 
     int ret = imcheck(src, dst, {}, {});
     if(ret != IM_STATUS_NOERROR)
+    {
         printf("%d, imcheck error! %s\n", __LINE__, imStrError((IM_STATUS)ret));
+        return false;
+    }
 
     ret = imcvtcolor(src, dst, RK_FORMAT_RGB_888, RK_FORMAT_YCrCb_420_SP);
     if(ret != IM_STATUS_SUCCESS)
+    {
         printf("%d, cvtColor error! %s\n", __LINE__, imStrError((IM_STATUS)ret));
+        return false;
+    }
+    return true;
 }
 
-const int MAX_CONCURRENT_FRAMES = 10;
 
-struct FrameData {
-    cv::Mat frame;
-    int index;
-};
+const int MAX_CONCURRENT_FRAMES = 10;
 
 SafeQueue<FrameData> g_readQueue(50);
 SafeQueue<FrameData> g_writeQueue(50);
@@ -396,11 +542,29 @@ void readThreadFunc(cv::VideoCapture &cap, int max_frames)
             std::cerr << "[ReadThread] read failed or EOF.\n";
             break;
         }
-        FrameData data{ std::move(frame), idx++ };
+        FrameData data = FrameData::fromMat(std::move(frame), idx++);
         g_readQueue.enqueue(std::move(data));
     }
     g_readFinish = true;
     std::cerr << "[ReadThread] finished.\n";
+}
+
+void readThreadFuncDmaBuf(CameraDmaBufCapture &cap, int max_frames)
+{
+    int idx = 0;
+    while(max_frames <= 0 || idx < max_frames)
+    {
+        FrameData data;
+        if(!cap.readFrameData(data, idx))
+        {
+            std::cerr << "[ReadThreadDmaBuf] read failed or EOF.\n";
+            break;
+        }
+        idx++;
+        g_readQueue.enqueue(std::move(data));
+    }
+    g_readFinish = true;
+    std::cerr << "[ReadThreadDmaBuf] finished.\n";
 }
 
 void aggregatorThreadFunc(ThreadPoll &npu_pool)
@@ -415,8 +579,9 @@ void aggregatorThreadFunc(ThreadPoll &npu_pool)
         {
             if(g_readQueue.dequeue(inputFD))
             {
-                auto fut = npu_pool.submit_task_async(inputFD.index, std::move(inputFD.frame));
-                tasks_inflight[inputFD.index] = std::move(fut);
+                int frame_index = inputFD.index;
+                auto fut = npu_pool.submit_task_async(std::move(inputFD));
+                tasks_inflight[frame_index] = std::move(fut);
             }
         }
 
@@ -428,9 +593,8 @@ void aggregatorThreadFunc(ThreadPoll &npu_pool)
             {
                 ProcessResult result = it->second.get();
 
-                FrameData outputFD;
+                FrameData outputFD = std::move(result.frame_data);
                 outputFD.index = nextWriteIndex;
-                outputFD.frame = std::move(result.processed_img);
                 g_writeQueue.enqueue(std::move(outputFD));
 
                 tasks_inflight.erase(it);
@@ -466,15 +630,43 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode)
 
     char *bgr_write_buf = nullptr;
     uint8_t *nv12_buf = nullptr;
+    int nv12_dma_fd = -1;
+    bool mpp_fd_enabled = use_mpp && g_mpp_input_fd_mode;
+    std::string nv12_heap_path;
     rga_buffer_handle_t bgr_handle = 0;
     rga_buffer_handle_t nv12_handle = 0;
 
     if(use_mpp)
     {
         bgr_write_buf = (char *)malloc(bgr_size);
-        nv12_buf      = (uint8_t *)malloc(nv12_size);
         bgr_handle    = importbuffer_virtualaddr(bgr_write_buf, bgr_size);
-        nv12_handle   = importbuffer_virtualaddr(nv12_buf,      nv12_size);
+
+        if(mpp_fd_enabled)
+        {
+            nv12_dma_fd = allocateDmaHeapFd(nv12_size, &nv12_heap_path);
+            if(nv12_dma_fd >= 0)
+                nv12_handle = importbuffer_fd(nv12_dma_fd, nv12_size);
+
+            if(nv12_dma_fd < 0 || nv12_handle == 0)
+            {
+                printf("[WriteThread] MPP fd path init failed, fallback to copy path. fd=%d handle=%u\n",
+                       nv12_dma_fd, nv12_handle);
+                if(nv12_handle) { releasebuffer_handle(nv12_handle); nv12_handle = 0; }
+                if(nv12_dma_fd >= 0) { close(nv12_dma_fd); nv12_dma_fd = -1; }
+                mpp_fd_enabled = false;
+            }
+            else
+            {
+                printf("[WriteThread] MPP fd path enabled, heap=%s, fd=%d, nv12_size=%d\n",
+                       nv12_heap_path.c_str(), nv12_dma_fd, nv12_size);
+            }
+        }
+
+        if(!mpp_fd_enabled)
+        {
+            nv12_buf    = (uint8_t *)malloc(nv12_size);
+            nv12_handle = importbuffer_virtualaddr(nv12_buf, nv12_size);
+        }
 
         if(bgr_handle == 0 || nv12_handle == 0)
             printf("[WriteThread] RGA buffer prealloc failed!\n");
@@ -507,43 +699,115 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode)
         if(use_mpp)
         {
             auto mpp_start = std::chrono::high_resolution_clock::now();
-            BGR_to_NV12_with_RGA(
+            bool converted = BGR_to_NV12_with_RGA(
                 outputFD.frame.data,
                 bgr_write_buf, bgr_handle,
                 nv12_buf,      nv12_handle,
                 outputFD.frame.cols, outputFD.frame.rows
             );
-            process_frame(nv12_buf, nv12_size);
+
+            int ret = -1;
+            if(converted)
+            {
+                if(mpp_fd_enabled)
+                    ret = process_frame_fd(nv12_dma_fd, nv12_size);
+                else
+                    ret = process_frame(nv12_buf, nv12_size);
+            }
+
+            if(ret != 0)
+                printf("[WriteThread] MPP process frame failed, index=%d, fd_mode=%d\n",
+                       outputFD.index, mpp_fd_enabled ? 1 : 0);
+
             auto mpp_end = std::chrono::high_resolution_clock::now();
             BenchmarkStats::instance().record_mpp(
                 std::chrono::duration_cast<std::chrono::microseconds>(mpp_end - mpp_start).count());
         }
     }
 
+    if(mpp_fd_enabled)
+        release_frame_fd();
     if(bgr_handle)  releasebuffer_handle(bgr_handle);
     if(nv12_handle) releasebuffer_handle(nv12_handle);
     if(bgr_write_buf) free(bgr_write_buf);
     if(nv12_buf) free(nv12_buf);
+    if(nv12_dma_fd >= 0) close(nv12_dma_fd);
 
     std::cerr << "[WriteThread] finished.\n";
 }
 
-static int runSnapshot(const RunOptions &options)
+
+static bool openDirectV4L2Camera(const RunOptions &options, CameraDmaBufCapture &cap)
 {
+    CameraDmaBufOptions dma_options;
+    dma_options.camera_id = options.camera_id;
+    dma_options.width = options.camera_width;
+    dma_options.height = options.camera_height;
+    dma_options.fps = options.camera_fps;
+    dma_options.format = options.camera_format;
+    dma_options.export_dmabuf = options.input_backend == InputBackend::DmaBuf;
+    return cap.open(dma_options);
+}
+
+static bool useDmaBufInput(const RunOptions &options)
+{
+    return options.input_source == InputSource::Camera && options.input_backend == InputBackend::DmaBuf;
+}
+
+static bool useDirectV4L2Input(const RunOptions &options)
+{
+    return options.input_source == InputSource::Camera &&
+           (options.input_backend == InputBackend::V4L2Mmap ||
+            options.input_backend == InputBackend::DmaBuf);
+}
+
+static bool readFirstInputFrame(const RunOptions &options, cv::Mat &frame)
+{
+    if(useDirectV4L2Input(options))
+    {
+        CameraDmaBufCapture dma_cap;
+        if(!openDirectV4L2Camera(options, dma_cap))
+            return false;
+        return dma_cap.read(frame) && !frame.empty();
+    }
+
     cv::VideoCapture cap;
     if(!openInputCapture(options, cap))
-        return -1;
+        return false;
+    return cap.read(frame) && !frame.empty();
+}
 
+static int runSnapshot(const RunOptions &options)
+{
     cv::Mat frame;
-    int idx = 0;
-    while(idx <= options.snapshot_frame)
+    if(useDirectV4L2Input(options))
     {
-        if(!cap.read(frame) || frame.empty())
-        {
-            std::cerr << "Fail to read snapshot frame: " << options.snapshot_frame << "\n";
+        CameraDmaBufCapture cap;
+        if(!openDirectV4L2Camera(options, cap))
             return -1;
+        for(int idx = 0; idx <= options.snapshot_frame; ++idx)
+        {
+            if(!cap.read(frame) || frame.empty())
+            {
+                std::cerr << "Fail to read dmabuf snapshot frame: " << options.snapshot_frame << "\n";
+                return -1;
+            }
         }
-        idx++;
+    }
+    else
+    {
+        cv::VideoCapture cap;
+        if(!openInputCapture(options, cap))
+            return -1;
+
+        for(int idx = 0; idx <= options.snapshot_frame; ++idx)
+        {
+            if(!cap.read(frame) || frame.empty())
+            {
+                std::cerr << "Fail to read snapshot frame: " << options.snapshot_frame << "\n";
+                return -1;
+            }
+        }
     }
 
     BenchmarkStats::instance().reset(1, runLabel(options));
@@ -566,14 +830,11 @@ static int runSnapshot(const RunOptions &options)
     return 0;
 }
 
+
 static int runRknnOnly(const RunOptions &options)
 {
-    cv::VideoCapture cap;
-    if(!openInputCapture(options, cap))
-        return -1;
-
     cv::Mat frame;
-    if(!cap.read(frame) || frame.empty())
+    if(!readFirstInputFrame(options, frame))
     {
         std::cerr << "Fail to read first frame for rknn-only benchmark.\n";
         return -1;
@@ -633,12 +894,16 @@ int main(int argc, char **argv)
 
     std::cout << "[Main] mode=" << modeName(options.mode)
               << ", input=" << inputSourceName(options.input_source)
+              << ", input_backend=" << inputBackendName(options.input_backend)
               << ", label=" << label
               << ", thread_count=" << options.thread_count
               << ", loops=" << options.loops
               << ", verbose=" << g_verbose_log
               << ", box_threshold=" << g_box_threshold
-              << ", nms_threshold=" << g_nms_threshold;
+              << ", nms_threshold=" << g_nms_threshold
+              << ", rknn_input_mode=" << (g_rknn_input_fd_mode ? "fd" : "copy")
+              << ", rknn_output_mode=" << (g_rknn_output_mem_mode ? "mem" : "copy")
+              << ", mpp_input_mode=" << (g_mpp_input_fd_mode ? "fd" : "copy");
     if(options.mode == RunMode::Rtmp)
         std::cout << ", rtmp_url=" << options.rtmp_url;
     std::cout << std::endl;
@@ -654,19 +919,38 @@ int main(int argc, char **argv)
     PerfMonitor::instance().start("../debug_records/csv/perf_log.csv", 500);
 
     cv::VideoCapture cap;
-    if(!openInputCapture(options, cap))
+    CameraDmaBufCapture dma_cap;
+    int width = 0;
+    int height = 0;
+    double fps = 0.0;
+
+    if(useDirectV4L2Input(options))
     {
-        PerfMonitor::instance().stop();
-        return -1;
+        if(!openDirectV4L2Camera(options, dma_cap))
+        {
+            PerfMonitor::instance().stop();
+            return -1;
+        }
+        width = dma_cap.width();
+        height = dma_cap.height();
+        fps = dma_cap.fps();
+    }
+    else
+    {
+        if(!openInputCapture(options, cap))
+        {
+            PerfMonitor::instance().stop();
+            return -1;
+        }
+        width  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+        height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+        fps    = cap.get(cv::CAP_PROP_FPS);
+        if(fps < 1.0) fps = options.input_source == InputSource::Camera ? options.camera_fps : 25.0;
     }
 
-    int    width  = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
-    int    height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
-    double fps    = cap.get(cv::CAP_PROP_FPS);
-    if(fps < 1.0) fps = options.input_source == InputSource::Camera ? options.camera_fps : 25.0;
-
     std::cout << "[Input] actual=" << width << "x" << height
-              << "@" << fps << "fps" << std::endl;
+              << "@" << fps << "fps"
+              << ", backend=" << inputBackendName(options.input_backend) << std::endl;
 
     int hor_stride = ALIGN(width, 16);
     int ver_stride = ALIGN(height, 16);
@@ -709,7 +993,11 @@ int main(int argc, char **argv)
     ThreadPoll npu_pool("../model/yolov5s.rknn", options.thread_count, draw_results);
 
     int max_read_frames = options.input_source == InputSource::Camera ? options.loops : 0;
-    std::thread tRead(readThreadFunc, std::ref(cap), max_read_frames);
+    std::thread tRead;
+    if(useDirectV4L2Input(options))
+        tRead = std::thread(readThreadFuncDmaBuf, std::ref(dma_cap), max_read_frames);
+    else
+        tRead = std::thread(readThreadFunc, std::ref(cap), max_read_frames);
     std::thread tAggregator(aggregatorThreadFunc, std::ref(npu_pool));
     std::thread tWrite(writeThreadFunc, writer.get(), options.mode);
 

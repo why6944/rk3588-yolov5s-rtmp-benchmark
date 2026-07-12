@@ -96,6 +96,7 @@ include_directories(
 # 定义可执行目标
 add_executable(app 
     main.cpp 
+    camera_dmabuf.cpp
     thread_poll.cpp
     yolov5s.cpp
     post_process.cpp

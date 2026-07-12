@@ -27,10 +27,14 @@ void ThreadPoll::init(const char* model_path, int num_threads)
 {
     if(num_threads <= 0) num_threads = 1;
 
-    // 创建 num_threads 个 yolo 实例（逻辑不变，i % 3 保证 npu_index 在 0/1/2 内）
+    // 第一个 yolo 正常加载模型权重，后续 yolo 用 rknn_dup_context 共享权重。
+    // 每个 worker 仍然独占自己的 rknn_context，再分别绑定到 RK3588 三个 NPU core。
+    rknn_context* shared_context = nullptr;
     for(int i = 0; i < num_threads; i++)
     {
-        auto yolo = std::make_shared<Yolov5s>(model_path, i % 3);
+        auto yolo = std::make_shared<Yolov5s>(model_path, i % 3, shared_context);
+        if(i == 0)
+            shared_context = yolo->get_context_ptr();
         yolo_group.emplace_back(yolo);
     }
 
@@ -93,43 +97,38 @@ void ThreadPoll::worker(int id)
     LOG_DEBUG("Worker %d exited, remaining tasks: %zu\n", id, tasks.size());
 }
 
-std::future<ProcessResult> ThreadPoll::submit_task_async(int index, cv::Mat img)
+std::future<ProcessResult> ThreadPoll::submit_task_async(FrameData frame_data)
 {
-    // -------------------------------------------------------
-    // [修改] lambda 的参数从无参数改为接收一个 yolo 实例
-    //
-    // 原来：
-    //   packaged_task<ProcessResult()> task([this, index, img]() {
-    //       auto yolo = yolo_group[index % yolo_group.size()]; // 按帧号选
-    //       ...
-    //   });
-    //
-    // 新的：
-    //   packaged_task<ProcessResult(shared_ptr<Yolov5s>)> task([index, img](shared_ptr<Yolov5s> yolo) {
-    //       // yolo 由调用方（worker）传入，不在这里选
-    //       ...
-    //   });
-    //
-    // 关键变化：lambda 不再捕获 this，不再访问 yolo_group，
-    // yolo 由 worker 调用时注入，谁执行任务谁决定用哪个 yolo。
-    // -------------------------------------------------------
     bool draw_results = draw_results_;
     std::packaged_task<ProcessResult(std::shared_ptr<Yolov5s>)> task(
-        [index, img = std::move(img), draw_results](std::shared_ptr<Yolov5s> yolo) mutable
+        [frame_data = std::move(frame_data), draw_results](std::shared_ptr<Yolov5s> yolo) mutable
         {
             ProcessResult result;
             try
             {
-                LOG_DEBUG("worker get task %d！\n", index);
+                LOG_DEBUG("worker get task %d\n", frame_data.index);
+
+                if(!frame_data.hasMat() && !frame_data.hasDmaBuf())
+                {
+                    result.error_msg = "FrameData has no cv::Mat or DMA-BUF for current processing path";
+                    result.success = false;
+                    return result;
+                }
 
                 detect_result_group_t detections;
-                yolo->inference_image(img, detections);
-                if(draw_results)
-                    yolo->draw_result(img, detections);
+                int ret = yolo->inference_frame(frame_data, detections);
+                if(ret != 0)
+                {
+                    result.error_msg = "inference_frame failed";
+                    result.success = false;
+                    return result;
+                }
+                if(draw_results && frame_data.hasMat())
+                    yolo->draw_result(frame_data.frame, detections);
 
-                result.processed_img       = std::move(img);
-                result.detection_results   = detections;
-                result.success             = true;
+                result.frame_data         = std::move(frame_data);
+                result.detection_results  = detections;
+                result.success            = true;
             }
             catch(const std::exception& e)
             {
@@ -144,7 +143,7 @@ std::future<ProcessResult> ThreadPoll::submit_task_async(int index, cv::Mat img)
     {
         std::unique_lock<std::mutex> lock(queue_mutex);
         tasks.emplace(std::move(task));
-        LOG_DEBUG("[submit_task_async] 已压入tasks队列, 现在大小=%zu\n", tasks.size());
+        LOG_DEBUG("[submit_task_async] pushed task, queue size=%zu\n", tasks.size());
     }
     condition.notify_one();
     return future;
