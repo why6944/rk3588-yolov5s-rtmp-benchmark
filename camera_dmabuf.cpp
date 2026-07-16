@@ -50,6 +50,7 @@ bool CameraDmaBufCapture::open(const CameraDmaBufOptions &options)
 {
     close();
     export_dmabuf_ = options.export_dmabuf;
+    copy_to_mat_ = options.copy_to_mat;
 
     std::string dev = "/dev/video" + std::to_string(options.camera_id);
     fd_ = ::open(dev.c_str(), O_RDWR | O_NONBLOCK, 0);
@@ -185,11 +186,13 @@ bool CameraDmaBufCapture::setupBuffers()
         }
     }
 
-    bgr_buf_.resize(static_cast<size_t>(width_) * height_ * 3);
-    bgr_handle_ = importbuffer_virtualaddr(bgr_buf_.data(), bgr_buf_.size());
-    if (!bgr_handle_) {
-        std::cerr << "[CameraDmaBuf] importbuffer_virtualaddr output failed\n";
-        return false;
+    if (copy_to_mat_) {
+        bgr_buf_.resize(static_cast<size_t>(width_) * height_ * 3);
+        bgr_handle_ = importbuffer_virtualaddr(bgr_buf_.data(), bgr_buf_.size());
+        if (!bgr_handle_) {
+            std::cerr << "[CameraDmaBuf] importbuffer_virtualaddr output failed\n";
+            return false;
+        }
     }
 
     return true;
@@ -300,24 +303,20 @@ bool CameraDmaBufCapture::readFrameData(FrameData &frame_data, int frame_index)
     }
 
     Buffer &src_buffer = buffers_[buf.index];
-    bool ok = false;
     cv::Mat cloned_frame;
+    if (copy_to_mat_) {
+        rga_buffer_t src = wrapbuffer_handle(src_buffer.rga_handle, width_, height_, RK_FORMAT_YUYV_422);
+        rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_BGR_888);
+        int check = imcheck(src, dst, {}, {});
+        int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_BGR_888) : check;
+        if (ret != IM_STATUS_SUCCESS) {
+            std::cerr << "[CameraDmaBuf] RGA YUYV->BGR failed: " << imStrError((IM_STATUS)ret) << "\n";
+            queueBuffer(buf.index);
+            return false;
+        }
 
-    rga_buffer_t src = wrapbuffer_handle(src_buffer.rga_handle, width_, height_, RK_FORMAT_YUYV_422);
-    rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_BGR_888);
-    int check = imcheck(src, dst, {}, {});
-    int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_BGR_888) : check;
-    if (ret == IM_STATUS_SUCCESS) {
         cv::Mat bgr(height_, width_, CV_8UC3, bgr_buf_.data());
         cloned_frame = bgr.clone();
-        ok = true;
-    } else {
-        std::cerr << "[CameraDmaBuf] RGA YUYV->BGR failed: " << imStrError((IM_STATUS)ret) << "\n";
-    }
-
-    if (!ok) {
-        queueBuffer(buf.index);
-        return false;
     }
 
     auto ref = std::make_shared<DmaBufFrameRef>();
@@ -340,7 +339,9 @@ bool CameraDmaBufCapture::readFrameData(FrameData &frame_data, int frame_index)
         }
     };
 
-    if (export_dmabuf_)
+    if (!copy_to_mat_)
+        frame_data = FrameData::fromCameraDmaBuf(std::move(ref), frame_index);
+    else if (export_dmabuf_)
         frame_data = FrameData::fromCameraDmaBufMat(std::move(cloned_frame), std::move(ref), frame_index);
     else
         frame_data = FrameData::fromCameraMmapMat(std::move(cloned_frame), std::move(ref), frame_index);

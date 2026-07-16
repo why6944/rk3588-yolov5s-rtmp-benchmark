@@ -21,6 +21,9 @@ struct CameraDmaBufOptions
     int fps = 30;
     std::string format = "YUYV";
     bool export_dmabuf = true;
+    // Keep camera frames as DMA-BUF only. This is for camera -> RGA -> MPP
+    // paths that do not need an OpenCV/AVI frame.
+    bool copy_to_mat = true;
 };
 
 class CameraDmaBufCapture
@@ -72,6 +75,7 @@ private:
     rga_buffer_handle_t bgr_handle_ = 0;
     bool streaming_ = false;
     bool export_dmabuf_ = true;
+    bool copy_to_mat_ = true;
 };
 
 #endif

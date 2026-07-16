@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <mutex>
 #include <chrono>
+extern int g_skip_sigmoid;
 
 using namespace std;
 
@@ -66,7 +67,7 @@ static int nms(int validCount, vector<float> &boxes, vector<int> &classID,
 {
     for(int i = 0;i <validCount; i++)
     {
-        if(indexArray[i] == -1 || classID[i] != currentClass)
+        if(indexArray[i] == -1 || classID[indexArray[i]] != currentClass)
         {
             continue;
         }
@@ -75,7 +76,7 @@ static int nms(int validCount, vector<float> &boxes, vector<int> &classID,
         for(int j = i+1; j < validCount; j++)
         {
             int m = indexArray[j];
-            if(m == -1 || classID[j] != currentClass)
+            if(m == -1 || classID[m] != currentClass)
             {
                 continue;
             }
@@ -93,7 +94,7 @@ static int nms(int validCount, vector<float> &boxes, vector<int> &classID,
             float iou = calculateIOU(xmin0, ymin0, xmax0, ymax0, xmin1, ymin1, xmax1, ymax1);
             if(iou > nms_threshold )
             {
-                indexArray[i] = -1;
+                indexArray[j] = -1;
             }            
         }
     }
@@ -168,8 +169,8 @@ int process(int8_t *input, float *anchor, int grid_h, int grid_w, int model_heig
     int validCount = 0;
     int grid_len = grid_h * grid_w;
 
-    float box_unsig = unsigmoid(box_threshold);
-    int8_t box_int8 = qnt_f32_to_int8(box_unsig, zp, scale);
+    float box_thresh_val = g_skip_sigmoid ? box_threshold : unsigmoid(box_threshold);
+    int8_t box_int8 = qnt_f32_to_int8(box_thresh_val, zp, scale);
 
     for (int a = 0; a < 3; a++)
     {
@@ -185,10 +186,10 @@ int process(int8_t *input, float *anchor, int grid_h, int grid_w, int model_heig
                     int8_t *box_p = input + box_offt;
                     
                     // 反量化和 sigmoid 操作获取框的坐标信息
-                    float box_x = sigmoid(deqnt_int8_to_f32(*box_p, zp,scale)) * 2 - 0.5;
-                    float box_y = sigmoid(deqnt_int8_to_f32(*(box_p + 1 * grid_len), zp,scale)) * 2 - 0.5;
-                    float box_w = sigmoid(deqnt_int8_to_f32(*(box_p + 2 * grid_len), zp,scale)) * 2.0;
-                    float box_h = sigmoid(deqnt_int8_to_f32(*(box_p + 3 * grid_len), zp,scale)) * 2.0;
+                    float bx = deqnt_int8_to_f32(*box_p, zp,scale); if (!g_skip_sigmoid) bx = sigmoid(bx); float box_x = bx * 2 - 0.5;
+                    float by = deqnt_int8_to_f32(*(box_p + 1 * grid_len), zp,scale); if (!g_skip_sigmoid) by = sigmoid(by); float box_y = by * 2 - 0.5;
+                    float bw = deqnt_int8_to_f32(*(box_p + 2 * grid_len), zp,scale); if (!g_skip_sigmoid) bw = sigmoid(bw); float box_w = bw * 2.0;
+                    float bh = deqnt_int8_to_f32(*(box_p + 3 * grid_len), zp,scale); if (!g_skip_sigmoid) bh = sigmoid(bh); float box_h = bh * 2.0;
 
                     // 计算框的坐标
                     box_x = (box_x + j) * (float)stride;
@@ -217,7 +218,7 @@ int process(int8_t *input, float *anchor, int grid_h, int grid_w, int model_heig
                         }
                     }
 
-                    objProbs.emplace_back(sigmoid(deqnt_int8_to_f32(maxClassProb, zp, scale)));
+                    float mp = deqnt_int8_to_f32(maxClassProb, zp, scale); if (!g_skip_sigmoid) mp = sigmoid(mp); objProbs.emplace_back(mp);
                     classID.emplace_back(maxClassId);
                 }
             }
