@@ -61,7 +61,7 @@ v4l2-ctl --list-devices
 
 ## 性能摘要
 
-以下采用简历中的性能口径，指标必须结合测试条件理解：
+性能数据需结合测试条件理解：
 
 - **Camera + MPP 端到端**：640x480 YUYV@30 FPS 摄像头输入，经过 V4L2 DMA-BUF、RGA 预处理、RKNN 检测和 MPP H.264 编码，约 **28.5 FPS**；`top -p <pid>` 的 app 进程 CPU 单核等效占用约 **18.3%**。
 - **纯 RKNN 推理吞吐**：固定输入、6 个 worker 绑定 RK3588 三核 NPU，NPU 利用率约 **90%+**，吞吐约 **150+ FPS**。该指标不包含 Camera、RGA、NMS、画框、MPP 或 RTMP。
