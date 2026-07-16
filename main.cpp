@@ -66,8 +66,6 @@ int g_skip_sigmoid = 0;
 int g_rknn_input_fd_mode = 0;
 int g_rknn_output_mem_mode = 0;
 int g_mpp_input_fd_mode = 0;
-int g_use_neon = 0;
-const char* g_postprocess_mode = "scalar";
 }
 
 enum class RunMode
@@ -111,7 +109,6 @@ struct RunOptions
     int warmup = 50;
     int snapshot_frame = 120;
     std::string snapshot_output = "../debug_records/snapshot.png";
-    std::string postprocess_mode = "scalar";
     bool camera_zero_copy_mpp = false;
     bool show_help = false;
 };
@@ -447,17 +444,14 @@ static RunOptions parseOptions(int argc, char **argv)
         {
             options.snapshot_output = argv[i] + 18;
         }
-        else if(std::strcmp(argv[i], "--postprocess") == 0 && i + 1 < argc)
-        {
-            options.postprocess_mode = argv[++i];
-        }
-        else if(std::strncmp(argv[i], "--postprocess=", 14) == 0)
-        {
-            options.postprocess_mode = argv[i] + 14;
-        }
         else if(argv[i][0] != '-')
         {
             options.thread_count = std::atoi(argv[i]);
+        }
+        else
+        {
+            std::cerr << "Unknown option: " << argv[i] << "\n";
+            options.show_help = true;
         }
     }
     if(options.thread_count <= 0) options.thread_count = 1;
@@ -803,7 +797,12 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
                                     MAP_SHARED, nv12_dma_fd, 0);
                 if(mapped == MAP_FAILED)
                 {
-                    printf("[WriteThread] MPP fd buffer mmap failed; zero-copy overlay unavailable.\n");
+                    printf("[WriteThread] MPP fd buffer mmap failed, fallback to Mat/copy path.\n");
+                    releasebuffer_handle(nv12_handle);
+                    nv12_handle = 0;
+                    close(nv12_dma_fd);
+                    nv12_dma_fd = -1;
+                    mpp_fd_enabled = false;
                 }
                 else
                 {
@@ -836,7 +835,7 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
 
         FrameData &outputFD = output_result.frame_data;
         const bool direct_camera_mpp = camera_zero_copy_mpp && mpp_fd_enabled &&
-                                       outputFD.hasCameraBuffer() && !outputFD.hasMat();
+                                       outputFD.hasCameraBuffer();
 
         if(!direct_camera_mpp && outputFD.frame.empty())
             continue;
@@ -911,12 +910,11 @@ static bool openDirectV4L2Camera(const RunOptions &options, CameraDmaBufCapture 
     dma_options.fps = options.camera_fps;
     dma_options.format = options.camera_format;
     dma_options.export_dmabuf = options.input_backend == InputBackend::DmaBuf;
-    dma_options.copy_to_mat = !(options.camera_zero_copy_mpp &&
-                                options.input_source == InputSource::Camera &&
-                                options.input_backend == InputBackend::DmaBuf &&
-                                modeUsesMpp(options.mode) &&
-                                !modeWritesAvi(options.mode) &&
-                                g_mpp_input_fd_mode);
+    // Keep a BGR fallback while the direct Camera -> RGA -> MPP path is enabled.
+    // If external NV12 DMA-BUF initialization fails, writeThreadFunc can still encode
+    // this frame through the Mat/copy path instead of silently dropping it.
+    // The direct path still takes precedence whenever its MPP DMA-BUF is available.
+    dma_options.copy_to_mat = true;
     return cap.open(dma_options);
 }
 
@@ -983,6 +981,11 @@ static int runSnapshot(const RunOptions &options)
 
     BenchmarkStats::instance().reset(1, runLabel(options));
     Yolov5s yolo(options.model_path.c_str(), 0);
+    if(!yolo.isInitialized())
+    {
+        std::cerr << "Fail to initialize RKNN model for snapshot.\n";
+        return -1;
+    }
     detect_result_group_t detections;
     yolo.inference_image(frame, detections);
     yolo.draw_result(frame, detections);
@@ -1014,7 +1017,15 @@ static int runRknnOnly(const RunOptions &options)
     std::vector<std::shared_ptr<Yolov5s>> yolo_group;
     yolo_group.reserve(options.thread_count);
     for(int i = 0; i < options.thread_count; ++i)
-        yolo_group.emplace_back(std::make_shared<Yolov5s>(options.model_path.c_str(), i % 3));
+    {
+        auto yolo = std::make_shared<Yolov5s>(options.model_path.c_str(), i % 3);
+        if(!yolo->isInitialized())
+        {
+            std::cerr << "Fail to initialize RKNN worker " << i << " for rknn-only benchmark.\n";
+            return -1;
+        }
+        yolo_group.emplace_back(std::move(yolo));
+    }
 
     if(options.warmup > 0)
     {
@@ -1077,8 +1088,6 @@ int main(int argc, char **argv)
     std::string outPath = "../output.avi";
     std::string label = runLabel(options);
 
-    g_postprocess_mode = options.postprocess_mode.c_str();
-
     std::cout << "[Main] mode=" << modeName(options.mode)
               << ", input=" << inputSourceName(options.input_source)
               << ", input_backend=" << inputBackendName(options.input_backend)
@@ -1090,7 +1099,7 @@ int main(int argc, char **argv)
               << ", nms_threshold=" << g_nms_threshold
               << ", rknn_input_mode=" << (g_rknn_input_fd_mode ? "fd" : "copy")
               << ", rknn_output_mode=" << (g_rknn_output_mem_mode ? "mem" : "copy")
-              << ", postprocess=" << g_postprocess_mode << ", mpp_input_mode=" << (g_mpp_input_fd_mode ? "fd" : "copy");
+              << ", mpp_input_mode=" << (g_mpp_input_fd_mode ? "fd" : "copy");
     if(options.mode == RunMode::Rtmp)
         std::cout << ", rtmp_url=" << options.rtmp_url;
     std::cout << std::endl;
@@ -1185,6 +1194,14 @@ int main(int argc, char **argv)
 
     bool draw_results = modeDrawsResults(options.mode) && !camera_zero_copy_mpp;
     ThreadPoll npu_pool(options.model_path.c_str(), options.thread_count, draw_results);
+    if(!npu_pool.isInitialized())
+    {
+        std::cerr << "Fail to initialize ThreadPoll/RKNN workers.\n";
+        if(writer) writer->release();
+        if(use_mpp) close_streamer();
+        PerfMonitor::instance().stop();
+        return -1;
+    }
 
     int max_read_frames = options.input_source == InputSource::Camera ? options.loops : 0;
     std::thread tRead;

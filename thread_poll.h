@@ -33,11 +33,13 @@ public:
     ~ThreadPoll();
 
     std::future<ProcessResult> submit_task_async(FrameData frame_data);
+    bool isInitialized() const;
 
 private:
     void worker(int id);
-    void init(const char* model_path, int num_threads);
+    bool init(const char* model_path, int num_threads);
     bool draw_results_ = true;
+    bool initialized_ = false;
 
     // -------------------------------------------------------
     // [修改] 任务队列的类型从

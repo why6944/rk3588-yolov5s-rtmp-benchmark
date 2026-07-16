@@ -26,6 +26,7 @@ class Yolov5s
 private:
     rknn_context context = 0;
     unsigned int model_size = 0;
+    bool initialized_ = false;
 
     rknn_tensor_attr input_tensor;
     rknn_tensor_attr output_tensor;
@@ -85,6 +86,7 @@ public:
     ~Yolov5s();
 
     rknn_context* get_context_ptr();
+    bool isInitialized() const;
 
     int model_height;
     int model_width;

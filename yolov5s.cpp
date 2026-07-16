@@ -80,6 +80,7 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     if(can_share_context)
     {
         ret = rknn_dup_context(shared_context, &this->context);
+        if(ret != 0) this->context = 0;
         if(ret != 0)
             printf("rknn dup context failed! error code: %d, fallback to full model load.\n", ret);
         else
@@ -97,7 +98,11 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
 
         ret = rknn_init(&this->context, model_data, this->model_size, RKNN_FLAG_PRIOR_HIGH, NULL);
         if (ret != 0)
+        {
             printf("rknn init failed! error code: %d\n", ret);
+            this->context = 0;
+            return;
+        }
         else
             LOG_DEBUG("yolo %d initialized RKNN context by full model load.\n", npu_index);
     }
@@ -105,10 +110,19 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     if(npu_index % 4 == 0)      { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_0); }
     else if(npu_index % 4 == 1) { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_1); }
     else                        { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_2); }
-    if (ret != 0) printf("npu set failed! error code: %d\n", ret);
+    if (ret != 0)
+    {
+        printf("npu set failed! error code: %d\n", ret);
+        return;
+    }
 
     ret = rknn_query(context, RKNN_QUERY_IN_OUT_NUM, &this->num_tensors, sizeof(this->num_tensors));
-    if (ret != 0) printf("rknn_query failed! error code: %d\n", ret);
+    if (ret != 0 || num_tensors.n_input == 0 || num_tensors.n_output == 0)
+    {
+        printf("rknn_query tensor count failed! error code: %d, inputs=%u, outputs=%u\n",
+               ret, num_tensors.n_input, num_tensors.n_output);
+        return;
+    }
 
     input_attrs.resize(num_tensors.n_input);
     output_attrs.resize(num_tensors.n_output);
@@ -117,7 +131,11 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     {
         input_attrs[i].index = i;
         ret = rknn_query(context, RKNN_QUERY_INPUT_ATTR, &(this->input_attrs[i]), sizeof(this->input_attrs[i]));
-        if (ret != 0) printf("rknn_query input_attrs failed! error code: %d\n", ret);
+        if (ret != 0)
+        {
+            printf("rknn_query input_attrs failed! error code: %d\n", ret);
+            return;
+        }
         LOG_DEBUG("输入的tensor%d属性为：\n", i);
         print_tensor_attr(&(this->input_attrs[i]));
     }
@@ -126,7 +144,11 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     {
         output_attrs[i].index = i;
         ret = rknn_query(context, RKNN_QUERY_OUTPUT_ATTR, &(this->output_attrs[i]), sizeof(this->output_attrs[i]));
-        if (ret != 0) printf("rknn_query output_attrs failed! error code: %d\n", ret);
+        if (ret != 0)
+        {
+            printf("rknn_query output_attrs failed! error code: %d\n", ret);
+            return;
+        }
         print_tensor_attr(&(this->output_attrs[i]));
     }
 
@@ -146,6 +168,12 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
         model_channel = input_attrs[0].dims[3];
     }
 
+    if(model_width <= 0 || model_height <= 0 || model_channel <= 0)
+    {
+        printf("[Yolov5s] invalid input tensor shape or format.\n");
+        return;
+    }
+
     // 预分配 dst_buf（模型输入尺寸在 rknn_query 后已确定，只分配一次）
     int dst_size = model_height * model_width * model_channel;
     rga_dst_size_ = dst_size;
@@ -153,6 +181,7 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     if(g_rknn_input_fd_mode && init_rknn_input_fd_buffer(dst_size))
     {
         LOG_DEBUG("[yolo %d] rknn input fd buffer enabled, size=%d bytes\n", npu_index, dst_size);
+        initialized_ = true;
         return;
     }
 
@@ -165,14 +194,26 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     memset(rga_dst_buf_, 0x00, dst_size);
     rga_dst_handle_ = importbuffer_virtualaddr(rga_dst_buf_, dst_size);
     if (rga_dst_handle_ == 0)
+    {
         printf("[yolo %d] dst_buf importbuffer 失败！\n", npu_index);
+        free(rga_dst_buf_);
+        rga_dst_buf_ = nullptr;
+        return;
+    }
     else
         LOG_DEBUG("[yolo %d] dst_buf 预分配成功，大小=%d bytes\n", npu_index, dst_size);
+
+    initialized_ = true;
 }
 
 rknn_context* Yolov5s::get_context_ptr()
 {
     return &context;
+}
+
+bool Yolov5s::isInitialized() const
+{
+    return initialized_;
 }
 
 bool Yolov5s::init_rknn_input_fd_buffer(int dst_size)

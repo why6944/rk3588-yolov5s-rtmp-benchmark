@@ -5,7 +5,7 @@ ThreadPoll::ThreadPoll(const char* model_path, int num_threads, bool draw_result
 {
     run_flag = true;
     draw_results_ = draw_results;
-    init(model_path, num_threads);
+    initialized_ = init(model_path, num_threads);
 }
 
 ThreadPoll::~ThreadPoll()
@@ -23,7 +23,7 @@ ThreadPoll::~ThreadPoll()
     LOG_DEBUG("ThreadPoll destroyed.\n");
 }
 
-void ThreadPoll::init(const char* model_path, int num_threads)
+bool ThreadPoll::init(const char* model_path, int num_threads)
 {
     if(num_threads <= 0) num_threads = 1;
 
@@ -33,6 +33,14 @@ void ThreadPoll::init(const char* model_path, int num_threads)
     for(int i = 0; i < num_threads; i++)
     {
         auto yolo = std::make_shared<Yolov5s>(model_path, i % 3, shared_context);
+        if(!yolo->isInitialized())
+        {
+            std::cerr << "[ThreadPoll] failed to initialize RKNN worker " << i
+                      << "; stop before starting worker threads.\n";
+            yolo_group.clear();
+            run_flag = false;
+            return false;
+        }
         if(i == 0)
             shared_context = yolo->get_context_ptr();
         yolo_group.emplace_back(yolo);
@@ -43,6 +51,7 @@ void ThreadPoll::init(const char* model_path, int num_threads)
     {
         threads.emplace_back(&ThreadPoll::worker, this, i);
     }
+    return true;
 }
 
 void ThreadPoll::worker(int id)
@@ -97,8 +106,22 @@ void ThreadPoll::worker(int id)
     LOG_DEBUG("Worker %d exited, remaining tasks: %zu\n", id, tasks.size());
 }
 
+bool ThreadPoll::isInitialized() const
+{
+    return initialized_;
+}
+
 std::future<ProcessResult> ThreadPoll::submit_task_async(FrameData frame_data)
 {
+    if(!initialized_)
+    {
+        std::promise<ProcessResult> promise;
+        ProcessResult result;
+        result.error_msg = "ThreadPoll is not initialized";
+        promise.set_value(std::move(result));
+        return promise.get_future();
+    }
+
     bool draw_results = draw_results_;
     std::packaged_task<ProcessResult(std::shared_ptr<Yolov5s>)> task(
         [frame_data = std::move(frame_data), draw_results](std::shared_ptr<Yolov5s> yolo) mutable
