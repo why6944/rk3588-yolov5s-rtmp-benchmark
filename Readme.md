@@ -56,17 +56,42 @@ v4l2-ctl --list-devices
 | [系统设计与架构](docs/设计文档_系统架构.md) | 模块边界、线程模型、数据流与 DMA-BUF 生命周期 |
 | [API 与运行参数](docs/API文档_运行参数与模块接口.md) | 命令行、运行模式、输入后端和关键 C++ 接口 |
 | [测试报告](docs/测试报告_性能与验证.md) | 性能口径、吞吐、DMA-BUF 对比与限制 |
+| [SiLU vs ReLU A/B 实验](docs/SiLU_vs_ReLU_A-B实验报告.md) | 激活函数对比实验: 延迟、P50/P95、算子融合分析 |
+| [模型替换对比](docs/模型替换对比报告.md) | 旧模型→INT8-Normal 替换验证与性能基准 |
 | [Perf 教学与调试](docs/RK3588_perf性能分析教学调试文档.md) | perf 安装、采样、报告解读和实测过程 |
 | [代码问题深度讲解](docs/代码问题深度讲解.md) | 早期并发与预处理问题的分析和修复思路 |
 
 ## 性能摘要
 
-性能数据需结合测试条件理解：
+### 模型推理 (纯 NPU, rknn-only)
 
-- **Camera + MPP 端到端**：640x480 YUYV@30 FPS 摄像头输入，经过 V4L2 DMA-BUF、RGA 预处理、RKNN 检测和 MPP H.264 编码，约 **28.5 FPS**；`top -p <pid>` 的 app 进程 CPU 单核等效占用约 **18.3%**。
-- **纯 RKNN 推理吞吐**：固定输入、6 个 worker 绑定 RK3588 三核 NPU，NPU 利用率约 **90%+**，吞吐约 **150+ FPS**。该指标不包含 Camera、RGA、NMS、画框、MPP 或 RTMP。
-- **NEON 后处理优化**：在同一 INT8 输出样本上，后处理耗时由约 **0.137 ms/帧** 降至约 **0.038 ms/帧**；结果仍需以标量实现进行一致性校验。
-- **输出能力**：基于 RGA 完成 YUYV/RGB/NV12 转换，使用瑞芯微 MPP 进行 H.264 硬编码，并支持将检测后视频通过 RTMP 推送。
+| 指标 | 旧模型 (YOLOv5s, SiLU) | 新模型 (YOLOv5s, ReLU) | 加速比 |
+|------|----------------------|----------------------|:---:|
+| P50 rknn_run | 45.2 ms | **17.8 ms** | **2.5x** |
+| P95 rknn_run | 64.6 ms | **18.0 ms** | **3.6x** |
+| P99 rknn_run | 75.6 ms | **18.0 ms** | **4.2x** |
+| 延迟波动 (P99-P50) | 30.4 ms | **0.2 ms** | **152x** |
+| 1 线程 FPS | 18.5 | **52.6** | **2.8x** |
+| 6 线程 FPS | 113 | **153** | **+35%** |
+| 模型大小 | 8.4 MB | 7.99 MB | 相近 |
+
+> 测试条件: Orange Pi 5 Pro, RK3588S, NPU driver 0.9.6, librknnrt.so 2.3.2, INT8 Normal 量化, 50 张 COCO 校准集。SiLU 与 ReLU 模型使用同一 YOLOv5s 架构、同一 COCO 预训练权重、同一 Toolkit 2.3.2 转换。唯一变量是激活函数。
+
+ReLU 加速根因: SiLU (x * sigmoid(x)) 需要 Sigmoid + Mul 两个独立 NPU 操作, 每次激活需 3 次 DDR 读写; ReLU (max(0,x)) 与前置 Conv 融合为 ConvReLU 单指令, 每层节省约 112KB DDR 流量。60 层卷积累积减少约 6.6GB DDR 带宽占用。
+
+### Camera + MPP 端到端
+
+- V4L2 Camera (640x480 MJPEG@30fps) + RGA + RKNN + MPP: **28.1 FPS** (6 线程)
+- rknn_run: 18.4ms, preprocess: 1.77ms, MPP: 2.4ms
+- DMA-BUF 链路: app 进程 CPU 单核等效占用约 **18.3%**
+
+### NEON 后处理优化
+
+在同一 INT8 输出样本上, 后处理耗时由约 **0.137 ms/帧** 降至约 **0.038 ms/帧**; 结果仍需以标量实现进行一致性校验。
+
+### 输出能力
+
+基于 RGA 完成 YUYV/RGB/NV12 转换, 使用瑞芯微 MPP 进行 H.264 硬编码, 并支持将检测后视频通过 RTMP 推送。
 
 详细测试环境、采样口径和历史对比见 [测试报告](docs/测试报告_性能与验证.md)。
 

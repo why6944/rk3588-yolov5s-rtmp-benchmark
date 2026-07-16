@@ -1,0 +1,11 @@
+{
+  "evaluation": "RK3588 RKNN Runtime offline YOLOv5 evaluation",
+  "images": 78,
+  "candidate_threshold": 0.001,
+  "nms_threshold": 0.6,
+  "precision_recall_threshold": 0.25,
+  "models": [
+    {"name":"silu","mAP50":0.660681,"mAP50_95":0.42929,"precision_at_025":0.693299,"recall_at_025":0.562491,"images":78,"labels":559,"detections":14917,"classes_with_labels":65},
+    {"name":"relu","mAP50":0.626088,"mAP50_95":0.408139,"precision_at_025":0.634291,"recall_at_025":0.532718,"images":78,"labels":559,"detections":14694,"classes_with_labels":65}
+  ]
+}
