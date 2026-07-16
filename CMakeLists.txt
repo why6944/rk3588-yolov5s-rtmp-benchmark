@@ -100,6 +100,10 @@ add_executable(app
     thread_poll.cpp
     yolov5s.cpp
     post_process.cpp
+    post_process_common.cpp
+    post_process_scalar.cpp
+    post_process_auto.cpp
+    post_process_neon.cpp
     streamer.c
     rtmp.c
     mpp.c
@@ -128,3 +132,57 @@ if(ENABLE_RTMP)
 else()
     target_compile_definitions(app PRIVATE ENABLE_RTMP=0)
 endif()
+
+# ============================================================
+# Post-processing benchmark binary
+# ============================================================
+add_executable(benchmark_postprocess
+    benchmark_main.cpp
+    post_process_common.cpp
+    post_process_scalar.cpp
+    post_process_auto.cpp
+    post_process_neon.cpp
+)
+
+# Per-file compiler flags for controlled experiment
+set_source_files_properties(post_process_scalar.cpp PROPERTIES
+    COMPILE_FLAGS "-O2 -fno-tree-vectorize")
+set_source_files_properties(post_process_auto.cpp
+    post_process_neon.cpp PROPERTIES
+    COMPILE_FLAGS "-O3 -ftree-vectorize -fopt-info-vec-all")
+set_source_files_properties(post_process_neon.cpp PROPERTIES
+    COMPILE_FLAGS "-O2 -march=armv8-a+simd")
+set_source_files_properties(post_process_common.cpp PROPERTIES
+    COMPILE_FLAGS "-O2")
+
+target_link_libraries(benchmark_postprocess
+    pthread
+)
+
+
+# NEON-accelerated app variant (replaces post_process.cpp with NEON version)
+add_executable(app_neon
+    main.cpp
+    camera_dmabuf.cpp
+    thread_poll.cpp
+    yolov5s.cpp
+    post_process_neon_full.cpp
+    streamer.c
+    rtmp.c
+    mpp.c
+    perf_monitor.cpp
+    benchmark_stats.cpp
+)
+target_link_libraries(app_neon
+    ${OpenCV_LIBS}
+    ${RKNN_LIBS}
+    ${RGA_LIBS}
+    ${MPP_LIBRARY}
+    ${AVCODEC_LIBRARIES}
+    ${AVFORMAT_LIBRARIES}
+    ${AVUTIL_LIBRARIES}
+    ${SWSCALE_LIBRARIES}
+    ${OpenCL_LIBRARIES}
+    pthread m dl
+)
+target_compile_definitions(app_neon PRIVATE ENABLE_RTMP=0)
