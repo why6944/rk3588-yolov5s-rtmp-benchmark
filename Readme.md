@@ -61,7 +61,14 @@ v4l2-ctl --list-devices
 
 ## 性能摘要
 
-性能应与测试条件一起看：纯 RKNN 固定输入吞吐约 111 FPS；1080p 视频输入下，MPP-only 约 62 FPS、RTMP 约 56 FPS；640x480 YUYV@30 的 Camera DMA-BUF + RKNN fd 正常运行约 27.8 FPS。详细口径见 [测试报告](docs/测试报告_性能与验证.md)。
+以下采用简历中的性能口径，指标必须结合测试条件理解：
+
+- **Camera + MPP 端到端**：640x480 YUYV@30 FPS 摄像头输入，经过 V4L2 DMA-BUF、RGA 预处理、RKNN 检测和 MPP H.264 编码，约 **28.5 FPS**；`top -p <pid>` 的 app 进程 CPU 单核等效占用约 **18.3%**。
+- **纯 RKNN 推理吞吐**：固定输入、6 个 worker 绑定 RK3588 三核 NPU，NPU 利用率约 **90%+**，吞吐约 **150+ FPS**。该指标不包含 Camera、RGA、NMS、画框、MPP 或 RTMP。
+- **NEON 后处理优化**：在同一 INT8 输出样本上，后处理耗时由约 **0.137 ms/帧** 降至约 **0.038 ms/帧**；结果仍需以标量实现进行一致性校验。
+- **输出能力**：基于 RGA 完成 YUYV/RGB/NV12 转换，使用瑞芯微 MPP 进行 H.264 硬编码，并支持将检测后视频通过 RTMP 推送。
+
+详细测试环境、采样口径和历史对比见 [测试报告](docs/测试报告_性能与验证.md)。
 
 ## 目录
 
