@@ -58,10 +58,16 @@ v4l2-ctl --list-devices
 | [系统设计与架构](docs/设计文档_系统架构.md) | 模块边界、线程模型、数据流与 DMA-BUF 生命周期 |
 | [API 与运行参数](docs/API文档_运行参数与模块接口.md) | 命令行、运行模式、输入后端和关键 C++ 接口 |
 | [测试报告](docs/测试报告_性能与验证.md) | 性能口径、吞吐、DMA-BUF 对比与限制 |
-| [SiLU vs ReLU A/B 实验](docs/AB_REPORT_SiLU_vs_ReLU.md) | 激活函数对比实验: 延迟、P50/P95、算子融合分析 |
-| [模型替换对比](docs/模型替换对比报告.md) | 旧模型→INT8-Normal 替换验证与性能基准 |
-| [Perf 教学与调试](docs/RK3588_perf性能分析教学调试文档.md) | perf 安装、采样、报告解读和实测过程 |
-| [代码问题深度讲解](docs/代码问题深度讲解.md) | 早期并发与预处理问题的分析和修复思路 |
+| [模型替换与复现](docs/模型替换对比报告.md) | 旧模型与 ReLU INT8 模型对比、输出语义适配与复现方式 |
+
+<details>
+<summary>调试与历史材料</summary>
+
+- [SiLU vs ReLU A/B 实验附录](docs/appendix/SiLU_vs_ReLU_A_B实验.md)：模型延迟、算子融合与实验归因。
+- [perf 教学与调试附录](docs/debug/RK3588_perf性能分析教学调试文档.md)：安装、采样、报告解读和完整调试过程。
+- [早期代码问题讲解](docs/archive/代码问题深度讲解.md)：已修复问题的学习记录，不代表当前实现仍存在这些问题。
+
+</details>
 
 ## 性能摘要
 
