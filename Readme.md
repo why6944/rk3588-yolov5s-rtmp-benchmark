@@ -72,7 +72,7 @@ v4l2-ctl --list-devices
 | P99 rknn_run | 75.6 ms | **18.0 ms** | **4.2x** |
 | 延迟波动 (P99-P50) | 30.4 ms | **0.2 ms** | **152x** |
 | 1 线程 FPS | 18.5 | **52.6** | **2.8x** |
-| 6 线程 FPS | 113 | **153** | **+35%** |
+| 6 线程 FPS | 113 | **159** | **+41%** |
 | 模型大小 | 8.4 MB | 7.99 MB | 相近 |
 
 > 测试条件: Orange Pi 5 Pro, RK3588S, NPU driver 0.9.6, librknnrt.so 2.3.2, INT8 Normal 量化, 50 张 COCO 校准集。SiLU 与 ReLU 模型使用同一 YOLOv5s 架构、同一 COCO 预训练权重、同一 Toolkit 2.3.2 转换。唯一变量是激活函数。
