@@ -361,7 +361,8 @@ mkdir -p "$RUN"
 
 LD_PATH=/home/orangepi/streamer_codev5.0/Desktop/3rdparty/librknn_api/aarch64:/home/orangepi/streamer_codev5.0/Desktop/3rdparty/rga/RK3588/lib/Linux/aarch64
 
-# 模型路径在代码中写为 ../model/yolov5s.rknn，必须从构建目录启动 app。
+# 默认模型为 ../model/yolov5s_relu_INT8_Normal.rknn，必须从构建目录启动 app；
+# 程序会对 ReLU 模型自动跳过 sigmoid。
 cd "$ROOT/build-perf"
 
 sudo perf record \

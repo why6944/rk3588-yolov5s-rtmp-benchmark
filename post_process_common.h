@@ -27,6 +27,9 @@ float deqnt_int8_to_f32_cmn(int8_t int_num, int32_t zp, float scale);
 int8_t qnt_f32_to_int8_cmn(float float_num, int32_t zp, float scale);
 float sigmoid_cmn(float x);
 float unsigmoid_cmn(float y);
+void set_post_process_common_skip_sigmoid(bool skip);
+bool post_process_common_skip_sigmoid();
+float apply_activation_cmn(float x);
 int clamp_cmn(float val, int min, int max);
 
 // IOU + NMS

@@ -49,7 +49,10 @@ private:
         void *start = nullptr;
         size_t length = 0;
         int dmabuf_fd = -1;
+        // Lazily imported DMA-BUF handle used by the NPU/MPP-oriented path.
         rga_buffer_handle_t rga_handle = 0;
+        // mmap virtual-address handle used only to make the OpenCV BGR copy.
+        rga_buffer_handle_t rga_bgr_handle = 0;
     };
 
     static int xioctl(int fd, unsigned long request, void *arg);

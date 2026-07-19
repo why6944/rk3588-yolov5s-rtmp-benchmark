@@ -171,8 +171,8 @@ static int process(int8_t *input, float *anchor, int grid_h, int grid_w, int mod
 
 inline static int clamp(float val, int min, int max) { return val > min? (val < max? val : max) : min; }
 
-// Same post_process() signature as post_process.cpp — drop-in replacement
-int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
+// Full NEON implementation called by the runtime post-processing dispatcher.
+int post_process_neon_full(int8_t *output0, int8_t *output1, int8_t *output2,
                  int model_height, int model_width, float box_threshold,
                  float nms_threshold, float scale_w, float scale_h,
                  std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales,

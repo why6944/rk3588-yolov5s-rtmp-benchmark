@@ -10,6 +10,7 @@
 float anchor0_cmn[6] = {10, 13, 16, 30, 33, 23};
 float anchor1_cmn[6] = {30, 61, 62, 45, 59, 119};
 float anchor2_cmn[6] = {116, 90, 156, 198, 373, 326};
+static bool g_post_process_common_skip_sigmoid = false;
 
 float deqnt_int8_to_f32_cmn(int8_t int_num, int32_t zp, float scale) {
     return (float)(int_num - zp) * scale;
@@ -28,6 +29,18 @@ float sigmoid_cmn(float x) {
 
 float unsigmoid_cmn(float y) {
     return -1.0f * logf(1.0f / y - 1);
+}
+
+void set_post_process_common_skip_sigmoid(bool skip) {
+    g_post_process_common_skip_sigmoid = skip;
+}
+
+bool post_process_common_skip_sigmoid() {
+    return g_post_process_common_skip_sigmoid;
+}
+
+float apply_activation_cmn(float x) {
+    return g_post_process_common_skip_sigmoid ? x : sigmoid_cmn(x);
 }
 
 int clamp_cmn(float val, int min, int max) {

@@ -105,11 +105,14 @@ struct RunOptions
     int camera_fps = 30;
     std::string camera_format = "MJPG";
     std::string rtmp_url = "rtmp://192.168.137.1:1935/live/app";
-    std::string model_path = "../model/yolov5s.rknn";
+    std::string model_path = "../model/yolov5s_relu_INT8_Normal.rknn";
+    // -1 selects the model-aware default; 0/1 force sigmoid/skip-sigmoid.
+    int skip_sigmoid_override = -1;
     int warmup = 50;
     int snapshot_frame = 120;
     std::string snapshot_output = "../debug_records/snapshot.png";
     bool camera_zero_copy_mpp = false;
+    PostProcessMode postprocess_mode = PostProcessMode::Scalar;
     bool show_help = false;
 };
 
@@ -207,6 +210,13 @@ static InputBackend parseInputBackend(const char *value)
     return InputBackend::OpenCV;
 }
 
+static PostProcessMode parsePostProcessMode(const char *value)
+{
+    if(std::strcmp(value, "neon") == 0)
+        return PostProcessMode::Neon;
+    return PostProcessMode::Scalar;
+}
+
 static int fourccFromString(const std::string &fmt)
 {
     if(fmt.size() < 4)
@@ -234,10 +244,12 @@ static void printUsage(const char *prog)
         << "  --rknn-input-mode copy|fd         default: copy\n"
         << "  --rknn-output-mode copy|mem       default: copy\n"
         << "  --mpp-input-mode copy|fd          default: copy\n"
+        << "  --postprocess scalar|neon         default: scalar\n"
         << "  --camera-zero-copy-mpp             camera DMA-BUF -> RGA -> MPP path; boxes only, no AVI\n"
-        << "  --model-path PATH                 default: ../model/yolov5s.rknn\n"
+        << "  --model-path PATH                 default: ../model/yolov5s_relu_INT8_Normal.rknn\n"
         << "  --warmup N                        default: 50\n"
-        << "  --skip-sigmoid                    skip sigmoid for pre-activated outputs\n"
+        << "  --skip-sigmoid                    force skip sigmoid for activated outputs\n"
+        << "  --apply-sigmoid                   force sigmoid for legacy/logit outputs\n"
         << "  --rtmp-url URL\n";
 }
 
@@ -396,6 +408,14 @@ static RunOptions parseOptions(int argc, char **argv)
             const char *mode = argv[i] + 17;
             g_mpp_input_fd_mode = (std::strcmp(mode, "fd") == 0 || std::strcmp(mode, "dma") == 0) ? 1 : 0;
         }
+        else if(std::strcmp(argv[i], "--postprocess") == 0 && i + 1 < argc)
+        {
+            options.postprocess_mode = parsePostProcessMode(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--postprocess=", 14) == 0)
+        {
+            options.postprocess_mode = parsePostProcessMode(argv[i] + 14);
+        }
         else if(std::strcmp(argv[i], "--camera-zero-copy-mpp") == 0)
         {
             options.camera_zero_copy_mpp = true;
@@ -418,7 +438,11 @@ static RunOptions parseOptions(int argc, char **argv)
         }
         else if(std::strcmp(argv[i], "--skip-sigmoid") == 0)
         {
-            g_skip_sigmoid = 1;
+            options.skip_sigmoid_override = 1;
+        }
+        else if(std::strcmp(argv[i], "--apply-sigmoid") == 0)
+        {
+            options.skip_sigmoid_override = 0;
         }
         else if(std::strcmp(argv[i], "--rtmp-url") == 0 && i + 1 < argc)
         {
@@ -456,6 +480,11 @@ static RunOptions parseOptions(int argc, char **argv)
     }
     if(options.thread_count <= 0) options.thread_count = 1;
     if(options.loops <= 0) options.loops = 1;
+
+    const bool relu_model = options.model_path.find("relu") != std::string::npos;
+    g_skip_sigmoid = options.skip_sigmoid_override >= 0
+        ? options.skip_sigmoid_override
+        : (relu_model ? 1 : 0);
     return options;
 }
 
@@ -1086,6 +1115,7 @@ int main(int argc, char **argv)
     }
 
     std::string outPath = "../output.avi";
+    set_post_process_mode(options.postprocess_mode);
     std::string label = runLabel(options);
 
     std::cout << "[Main] mode=" << modeName(options.mode)
@@ -1099,7 +1129,10 @@ int main(int argc, char **argv)
               << ", nms_threshold=" << g_nms_threshold
               << ", rknn_input_mode=" << (g_rknn_input_fd_mode ? "fd" : "copy")
               << ", rknn_output_mode=" << (g_rknn_output_mem_mode ? "mem" : "copy")
-              << ", mpp_input_mode=" << (g_mpp_input_fd_mode ? "fd" : "copy");
+              << ", mpp_input_mode=" << (g_mpp_input_fd_mode ? "fd" : "copy")
+              << ", model_path=" << options.model_path
+              << ", skip_sigmoid=" << g_skip_sigmoid
+              << ", postprocess=" << post_process_mode_name();
     if(options.mode == RunMode::Rtmp)
         std::cout << ", rtmp_url=" << options.rtmp_url;
     std::cout << std::endl;

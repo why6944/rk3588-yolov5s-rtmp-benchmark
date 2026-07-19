@@ -13,6 +13,8 @@
 
 ## 快速开始
 
+默认模型为 `model/yolov5s_relu_INT8_Normal.rknn`。该模型输出已激活，程序会自动使用 `skip_sigmoid=1`；通常不需要再传 `--model-path` 或 `--skip-sigmoid`。切回旧的 `model/yolov5s.rknn` 时，程序自动使用标准 sigmoid，也可通过 `--apply-sigmoid` 显式指定。
+
 在 `Desktop` 目录编译：
 
 ```bash

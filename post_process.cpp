@@ -22,6 +22,17 @@ struct ProbArray
 };
 cv::Mat test_img;
 static vector<string> labels;
+static PostProcessMode g_post_process_mode = PostProcessMode::Scalar;
+
+void set_post_process_mode(PostProcessMode mode)
+{
+    g_post_process_mode = mode;
+}
+
+const char *post_process_mode_name()
+{
+    return g_post_process_mode == PostProcessMode::Neon ? "neon" : "scalar";
+}
 
 // Sigmoid 函数：计算输入值的 sigmoid 结果
 static float sigmoid(float x)
@@ -280,6 +291,12 @@ int post_process(int8_t *output0, int8_t *output1, int8_t *output2,
                  float nms_threshold, float scale_w, float scale_h,
                  std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t &result_group, post_process_timing_t *timing)
 {
+    if (g_post_process_mode == PostProcessMode::Neon) {
+        return post_process_neon_full(output0, output1, output2, model_height, model_width,
+                                      box_threshold, nms_threshold, scale_w, scale_h,
+                                      qnt_zps, qnt_scales, result_group, timing);
+    }
+
     // 1. 加载标签。post_process 会被多个 worker 同时调用，首次加载必须线程安全。
     static std::once_flag labels_once;
     std::call_once(labels_once, []() {

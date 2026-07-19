@@ -10,6 +10,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <opencv2/imgproc.hpp>
 
 #include "RgaUtils.h"
 
@@ -176,13 +177,21 @@ bool CameraDmaBufCapture::setupBuffers()
                 return false;
             }
             buffers_[i].dmabuf_fd = exp.fd;
-            buffers_[i].rga_handle = importbuffer_fd(exp.fd, buffers_[i].length);
+            // Create this DMA-BUF handle lazily after the first DQBUF, then reuse it
+            // for NPU/MPP access until close().
+            buffers_[i].rga_handle = 0;
+            // The BGR/OpenCV output copy uses the stable mmap RGA access path.
+            buffers_[i].rga_bgr_handle = importbuffer_virtualaddr(buffers_[i].start, buffers_[i].length);
+            if (!buffers_[i].rga_bgr_handle) {
+                std::cerr << "[CameraDmaBuf] import mmap camera buffer " << i << " failed\n";
+                return false;
+            }
         } else {
             buffers_[i].rga_handle = importbuffer_virtualaddr(buffers_[i].start, buffers_[i].length);
-        }
-        if (!buffers_[i].rga_handle) {
-            std::cerr << "[CameraDmaBuf] import camera buffer " << i << " failed\n";
-            return false;
+            if (!buffers_[i].rga_handle) {
+                std::cerr << "[CameraDmaBuf] import camera buffer " << i << " failed\n";
+                return false;
+            }
         }
     }
 
@@ -272,16 +281,32 @@ bool CameraDmaBufCapture::read(cv::Mat &frame)
     bool ok = false;
     if (buf.index < buffers_.size()) {
         Buffer &src_buffer = buffers_[buf.index];
-        rga_buffer_t src = wrapbuffer_handle(src_buffer.rga_handle, width_, height_, RK_FORMAT_YUYV_422);
-        rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_BGR_888);
-        int check = imcheck(src, dst, {}, {});
-        int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_BGR_888) : check;
-        if (ret == IM_STATUS_SUCCESS) {
-            cv::Mat bgr(height_, width_, CV_8UC3, bgr_buf_.data());
-            frame = bgr.clone();
-            ok = true;
-        } else {
-            std::cerr << "[CameraDmaBuf] RGA YUYV->BGR failed: " << imStrError((IM_STATUS)ret) << "\n";
+        // Create the RGA handle after the V4L2 buffer has been DQBUF-ed once.
+        // Keep it for this V4L2 buffer's lifetime; repeated import/release per frame
+        // causes corruption on this camera's exported DMA-BUF path.
+        if (export_dmabuf_ && !src_buffer.rga_handle) {
+            src_buffer.rga_handle = importbuffer_fd(src_buffer.dmabuf_fd, src_buffer.length);
+            if (!src_buffer.rga_handle) {
+                std::cerr << "[CameraDmaBuf] import current camera fd failed: "
+                          << src_buffer.dmabuf_fd << "\n";
+            }
+        }
+
+        rga_buffer_handle_t bgr_src_handle = export_dmabuf_
+            ? src_buffer.rga_bgr_handle
+            : src_buffer.rga_handle;
+        if (bgr_src_handle) {
+            rga_buffer_t src = wrapbuffer_handle(bgr_src_handle, width_, height_, RK_FORMAT_YUYV_422);
+            rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_RGB_888);
+            int check = imcheck(src, dst, {}, {});
+            int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_RGB_888) : check;
+            if (ret == IM_STATUS_SUCCESS) {
+                cv::Mat rgb(height_, width_, CV_8UC3, bgr_buf_.data());
+                cv::cvtColor(rgb, frame, cv::COLOR_RGB2BGR);
+                ok = true;
+            } else {
+                std::cerr << "[CameraDmaBuf] RGA YUYV->BGR failed: " << imStrError((IM_STATUS)ret) << "\n";
+            }
         }
     }
 
@@ -303,20 +328,38 @@ bool CameraDmaBufCapture::readFrameData(FrameData &frame_data, int frame_index)
     }
 
     Buffer &src_buffer = buffers_[buf.index];
+    if (export_dmabuf_ && !src_buffer.rga_handle) {
+        src_buffer.rga_handle = importbuffer_fd(src_buffer.dmabuf_fd, src_buffer.length);
+        if (!src_buffer.rga_handle) {
+            std::cerr << "[CameraDmaBuf] import current camera fd failed: "
+                      << src_buffer.dmabuf_fd << "\n";
+            queueBuffer(buf.index);
+            return false;
+        }
+    }
+
     cv::Mat cloned_frame;
     if (copy_to_mat_) {
-        rga_buffer_t src = wrapbuffer_handle(src_buffer.rga_handle, width_, height_, RK_FORMAT_YUYV_422);
-        rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_BGR_888);
+        rga_buffer_handle_t bgr_src_handle = export_dmabuf_
+            ? src_buffer.rga_bgr_handle
+            : src_buffer.rga_handle;
+        if (!bgr_src_handle) {
+            std::cerr << "[CameraDmaBuf] BGR source handle is unavailable\n";
+            queueBuffer(buf.index);
+            return false;
+        }
+        rga_buffer_t src = wrapbuffer_handle(bgr_src_handle, width_, height_, RK_FORMAT_YUYV_422);
+        rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_RGB_888);
         int check = imcheck(src, dst, {}, {});
-        int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_BGR_888) : check;
+        int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_RGB_888) : check;
         if (ret != IM_STATUS_SUCCESS) {
-            std::cerr << "[CameraDmaBuf] RGA YUYV->BGR failed: " << imStrError((IM_STATUS)ret) << "\n";
+            std::cerr << "[CameraDmaBuf] RGA YUYV->RGB failed: " << imStrError((IM_STATUS)ret) << "\n";
             queueBuffer(buf.index);
             return false;
         }
 
-        cv::Mat bgr(height_, width_, CV_8UC3, bgr_buf_.data());
-        cloned_frame = bgr.clone();
+        cv::Mat rgb(height_, width_, CV_8UC3, bgr_buf_.data());
+        cv::cvtColor(rgb, cloned_frame, cv::COLOR_RGB2BGR);
     }
 
     auto ref = std::make_shared<DmaBufFrameRef>();
@@ -359,6 +402,10 @@ void CameraDmaBufCapture::close()
     bgr_buf_.clear();
 
     for (auto &buffer : buffers_) {
+        if (buffer.rga_bgr_handle) {
+            releasebuffer_handle(buffer.rga_bgr_handle);
+            buffer.rga_bgr_handle = 0;
+        }
         if (buffer.rga_handle) {
             releasebuffer_handle(buffer.rga_handle);
             buffer.rga_handle = 0;

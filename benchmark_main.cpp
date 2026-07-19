@@ -23,6 +23,15 @@ struct Int8Frame {
     float scale[3];
 };
 
+struct StageTotals {
+    long long decode_us = 0;
+    long long sort_us = 0;
+    long long nms_us = 0;
+    long long result_us = 0;
+    long long valid_count = 0;
+    long long result_count = 0;
+};
+
 static bool load_frame(const char *path, Int8Frame &f) {
     FILE *fp = fopen(path, "rb");
     if (!fp) return false;
@@ -49,6 +58,7 @@ int main(int argc, char **argv) {
     const char *mode = "scalar";
     const char *data_dir = "int8_dumps";
     int nframes = 30, warmup = 100, iterations = 1000, rounds = 5, core = 4;
+    bool skip_sigmoid = false;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--postprocess") && i + 1 < argc) mode = argv[++i];
@@ -58,8 +68,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--iterations") && i + 1 < argc) iterations = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--rounds") && i + 1 < argc) rounds = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--core") && i + 1 < argc) core = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--skip-sigmoid")) skip_sigmoid = true;
         else if (!strcmp(argv[i], "--help")) {
-            printf("Usage: %s --postprocess scalar|auto|neon [--frames 30] [--warmup 100] [--iterations 1000] [--rounds 5] [--core 4]\n", argv[0]);
+            printf("Usage: %s --postprocess scalar|auto|neon [--skip-sigmoid] [--frames 30] [--warmup 100] [--iterations 1000] [--rounds 5] [--core 4]\n", argv[0]);
             return 0;
         }
     }
@@ -80,8 +91,9 @@ int main(int argc, char **argv) {
     if (!strcmp(mode, "auto")) { fn = process_auto; mode_name = "auto"; }
     else if (!strcmp(mode, "neon")) { fn = process_neon; mode_name = "neon"; }
 
-    printf("Mode: %s, Warmup: %d, Iterations: %d, Rounds: %d, Core: %d\n",
-           mode_name, warmup, iterations, rounds, core);
+    set_post_process_common_skip_sigmoid(skip_sigmoid);
+    printf("Mode: %s, skip_sigmoid: %d, Warmup: %d, Iterations: %d, Rounds: %d, Core: %d\n",
+           mode_name, skip_sigmoid, warmup, iterations, rounds, core);
 
     if (!pin_to_core(core)) fprintf(stderr, "Warning: pin to core %d failed\n", core);
 
@@ -101,8 +113,10 @@ int main(int argc, char **argv) {
     // Benchmark rounds
     printf("%-6s %10s %10s %10s %10s %10s\n", "Round", "Mean(us)", "Median(us)", "Min(us)", "Max(us)", "StdDev(us)");
     std::vector<double> round_means;
+    StageTotals overall_stages;
     for (int r = 0; r < rounds; r++) {
         std::vector<double> times; times.reserve(iterations);
+        StageTotals round_stages;
         for (int iter = 0; iter < iterations; iter++) {
             auto &f = frames[iter % frames.size()];
             zps = {f.zp[0], f.zp[1], f.zp[2]};
@@ -112,6 +126,12 @@ int main(int argc, char **argv) {
                                 640, 640, 0.5f, 0.5f, 1.0f, 1.0f, zps, scales, grp, &timing, fn);
             auto end = std::chrono::high_resolution_clock::now();
             times.push_back(std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+            round_stages.decode_us += timing.decode_us;
+            round_stages.sort_us += timing.sort_us;
+            round_stages.nms_us += timing.nms_us;
+            round_stages.result_us += timing.result_us;
+            round_stages.valid_count += timing.valid_count;
+            round_stages.result_count += timing.result_count;
         }
         std::sort(times.begin(), times.end());
         double sum = std::accumulate(times.begin(), times.end(), 0.0);
@@ -122,15 +142,30 @@ int main(int argc, char **argv) {
         printf("%-6d %10.1f %10.1f %10.1f %10.1f %10.1f\n",
                r + 1, mean, times[times.size() / 2], times.front(), times.back(), std::sqrt(var));
         round_means.push_back(mean);
-        // Also print timing breakdown for first round
-        if (r == 0) {
-            printf("  breakdown: decode=%lld sort=%lld nms=%lld result=%lld us, valid=%d result=%d\n",
-                   timing.decode_us, timing.sort_us, timing.nms_us, timing.result_us,
-                   timing.valid_count, timing.result_count);
-        }
+        printf("  breakdown_avg: decode=%.1f sort=%.1f nms=%.1f result=%.1f us, valid=%.1f result=%.1f\n",
+               (double)round_stages.decode_us / iterations,
+               (double)round_stages.sort_us / iterations,
+               (double)round_stages.nms_us / iterations,
+               (double)round_stages.result_us / iterations,
+               (double)round_stages.valid_count / iterations,
+               (double)round_stages.result_count / iterations);
+        overall_stages.decode_us += round_stages.decode_us;
+        overall_stages.sort_us += round_stages.sort_us;
+        overall_stages.nms_us += round_stages.nms_us;
+        overall_stages.result_us += round_stages.result_us;
+        overall_stages.valid_count += round_stages.valid_count;
+        overall_stages.result_count += round_stages.result_count;
     }
 
     double overall = std::accumulate(round_means.begin(), round_means.end(), 0.0) / round_means.size();
     printf("Overall: %.1f us (avg across %d rounds)\n", overall, rounds);
+    const double sample_count = static_cast<double>(iterations) * rounds;
+    printf("Overall breakdown_avg: decode=%.1f sort=%.1f nms=%.1f result=%.1f us, valid=%.1f result=%.1f\n",
+           overall_stages.decode_us / sample_count,
+           overall_stages.sort_us / sample_count,
+           overall_stages.nms_us / sample_count,
+           overall_stages.result_us / sample_count,
+           overall_stages.valid_count / sample_count,
+           overall_stages.result_count / sample_count);
     return 0;
 }

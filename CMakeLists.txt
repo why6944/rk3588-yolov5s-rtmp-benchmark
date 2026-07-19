@@ -106,6 +106,7 @@ add_executable(app
     thread_pool.cpp
     yolov5s.cpp
     post_process.cpp
+    post_process_neon_full.cpp
     post_process_common.cpp
     post_process_scalar.cpp
     post_process_auto.cpp
@@ -160,36 +161,12 @@ set_source_files_properties(post_process_neon.cpp PROPERTIES
     COMPILE_FLAGS "-O2 -march=armv8-a+simd")
 set_source_files_properties(post_process_common.cpp PROPERTIES
     COMPILE_FLAGS "-O2")
+set_source_files_properties(post_process_neon_full.cpp PROPERTIES
+    COMPILE_FLAGS "-O2 -march=armv8-a+simd")
 
 target_link_libraries(benchmark_postprocess
     pthread
 )
 
 
-# NEON-accelerated app variant (replaces post_process.cpp with NEON version)
-add_executable(app_neon
-    main.cpp
-    camera_dmabuf.cpp
-    thread_pool.cpp
-    yolov5s.cpp
-    post_process_neon_full.cpp
-    streamer.c
-    rtmp.c
-    mpp.c
-    perf_monitor.cpp
-    benchmark_stats.cpp
-)
-target_link_libraries(app_neon
-    ${OpenCV_LIBS}
-    ${RKNN_LIBS}
-    ${RGA_LIBS}
-    ${MPP_LIBRARY}
-    ${AVCODEC_LIBRARIES}
-    ${AVFORMAT_LIBRARIES}
-    ${AVUTIL_LIBRARIES}
-    ${SWSCALE_LIBRARIES}
-    ${OpenCL_LIBRARIES}
-    pthread m dl
-)
-target_compile_definitions(app_neon PRIVATE ENABLE_RTMP=0)
-add_executable(dump_int8 dump_int8.cpp yolov5s.cpp post_process.cpp perf_monitor.cpp benchmark_stats.cpp)
+add_executable(dump_int8 dump_int8.cpp yolov5s.cpp post_process.cpp post_process_neon_full.cpp perf_monitor.cpp benchmark_stats.cpp)

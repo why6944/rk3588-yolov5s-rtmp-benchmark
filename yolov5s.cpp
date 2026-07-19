@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <linux/videodev2.h>
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 
 #ifndef DMA_HEAP_IOC_MAGIC
 #define DMA_HEAP_IOC_MAGIC 'H'
@@ -55,6 +57,12 @@ static int allocate_dma_heap_fd(size_t size)
         close(heap_fd);
     }
     return -1;
+}
+
+static bool int8_dump_enabled()
+{
+    const char *value = std::getenv("RKNN_INT8_DUMP");
+    return value != nullptr && std::strcmp(value, "1") == 0;
 }
 
 static void print_tensor_attr(rknn_tensor_attr *attr)
@@ -561,7 +569,7 @@ int Yolov5s::inference_camera_dmabuf_yuyv(const DmaBufFrameRef &frame_ref, detec
     // ---- INT8 dump for post-processing benchmark ----
     {
         static int dump_frame_count = 0;
-        if (dump_frame_count < 0) {
+        if (int8_dump_enabled() && dump_frame_count < 30) {
             char fname[128];
             snprintf(fname, sizeof(fname), "int8_dumps/frame_%04d.bin", dump_frame_count);
             FILE *fp = fopen(fname, "wb");
@@ -788,7 +796,7 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
     // ---- INT8 dump for post-processing benchmark ----
     {
         static int dump_frame_count = 0;
-        if (dump_frame_count < 0) {
+        if (int8_dump_enabled() && dump_frame_count < 30) {
             char fname[128];
             snprintf(fname, sizeof(fname), "int8_dumps/frame_%04d.bin", dump_frame_count);
             FILE *fp = fopen(fname, "wb");

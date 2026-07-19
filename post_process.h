@@ -59,7 +59,17 @@ struct post_process_timing_t
     int result_count = 0;
 };
 
+enum class PostProcessMode
+{
+    Scalar,
+    Neon,
+};
+
+void set_post_process_mode(PostProcessMode mode);
+const char *post_process_mode_name();
 
 int post_process(int8_t *output0, int8_t *output1, int8_t *output2, int model_height, int model_width, float box_threshold,
                  float nms_threshold, float scale_w, float scale_h, std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t& group, post_process_timing_t *timing = nullptr);
+int post_process_neon_full(int8_t *output0, int8_t *output1, int8_t *output2, int model_height, int model_width, float box_threshold,
+                           float nms_threshold, float scale_w, float scale_h, std::vector<int32_t>& qnt_zps, std::vector<float>& qnt_scales, detect_result_group_t& group, post_process_timing_t *timing = nullptr);
 #endif
