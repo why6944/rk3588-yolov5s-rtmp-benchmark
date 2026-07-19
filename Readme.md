@@ -99,7 +99,7 @@ v4l2-ctl --list-devices
 
 - V4L2 Camera (640x480 YUYV@30fps) + RGA + RKNN + MPP: **28.1 FPS** (6 线程)
 - rknn_run: 18.4ms, preprocess: 1.77ms, MPP: 2.4ms
-- DMA-BUF 链路: app 进程 CPU 单核等效占用约 **18.3%**
+- DMA-BUF fd 链路 (ReLU 模型): app 进程 CPU 单核等效占用约 **13%** (实测 12-15.5%, 条件: V4L2_BUFFER_COUNT=8, dmabuf 后端, rknn-input-mode fd)
 
 ### NEON 后处理优化
 
