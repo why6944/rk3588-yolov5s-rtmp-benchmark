@@ -113,11 +113,11 @@ objdump -d benchmark_postprocess | grep -E 'ldr.*q[0-9]|cmge|umaxv|dup'
 
 | 指标 | scalar (-O2) | neon | 说明 |
 |------|-------------|------|------|
-| 帧耗时 | ~204 μs | **~189 μs** | ReLU 模型 162 候选 17 检出 |
-| decode 段 | ~176 μs | **~159 μs** | NEON 加速 objectness 阈值扫描 |
+| 帧耗时 | ~204 μs | **~185 μs** | ReLU 模型 162 候选 17 检出 |
+| decode 段 | ~176 μs | **~160 μs** | NEON 加速 objectness 阈值扫描 |
 | sort | ~2 μs | ~2 μs | 未向量化 |
 | nms | ~21 μs | ~21 μs | 未向量化 |
-| 加速比 | — | **~7%** | 仅 decode 段受益 |
+| 加速比 | — | **~9.5%** | 仅 decode 段受益 |
 
 ## 6. 完整管线 CPU 测试（摄像头）
 
@@ -198,7 +198,7 @@ grep -E "BenchmarkDetail.*post_decode|Benchmark.*postprocess" /path/to/output.lo
 | 指标 | scalar (app) | neon (app_neon) | 说明 |
 |------|-------------|-----------------|------|
 | post_decode | ~0.180 ms | **~0.160 ms** | 旧模型 camera 候选极少时加速比可达 3-4x |
-| postprocess | ~0.205 ms | **~0.190 ms** | 含 sort+NMS, NEON 未加速 |
+| postprocess | ~0.205 ms | **~0.185 ms** | 含 sort+NMS, NEON 未加速 |
 | CPU 单核口径 | ~26% | **~25.5%** | |
 | FPS | ~27.7 | ~27.9 | |
 
