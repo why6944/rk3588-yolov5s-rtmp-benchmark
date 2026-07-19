@@ -75,9 +75,9 @@ v4l2-ctl --list-devices
 | 6 线程 FPS | 113 | **159** | **+41%** |
 | 模型大小 | 8.4 MB | 7.99 MB | 相近 |
 
-> 测试条件: Orange Pi 5 Pro, RK3588S, NPU driver 0.9.6, librknnrt.so 2.3.2, INT8 Normal 量化, 50 张 COCO 校准集。SiLU 与 ReLU 模型使用同一 YOLOv5s 架构、同一 COCO 预训练权重、同一 Toolkit 2.3.2 转换。唯一变量是激活函数。
+> 测试条件: Orange Pi 5 Pro, RK3588S, NPU driver 0.9.6, librknnrt.so 2.3.2, INT8 Normal 量化, 50 张 COCO 校准集。SiLU 与 ReLU 模型均为 YOLOv5s 架构, 同一 Toolkit 2.3.2 转换。两份模型来源不同, 性能差异主要来自激活函数及模型图结构差异, 各因素贡献仍需进一步量化。
 
-ReLU 加速根因: SiLU (x * sigmoid(x)) 需要 Sigmoid + Mul 两个独立 NPU 操作, 每次激活需 3 次 DDR 读写; ReLU (max(0,x)) 与前置 Conv 融合为 ConvReLU 单指令, 每层节省约 112KB DDR 流量。60 层卷积累积减少约 6.6GB DDR 带宽占用。
+编译图观察到 ConvReLU 融合节点, 结合板端 A/B 结果判断性能提升与 ReLU 算子融合及模型图结构差异相关; 各因素贡献仍需结合 RKNPU 性能分析进一步量化。
 
 ### 线程扩展性 (ReLU INT8-Normal, rknn-only)
 
