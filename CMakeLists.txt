@@ -186,3 +186,4 @@ target_link_libraries(app_neon
     pthread m dl
 )
 target_compile_definitions(app_neon PRIVATE ENABLE_RTMP=0)
+add_executable(dump_int8 dump_int8.cpp yolov5s.cpp post_process.cpp perf_monitor.cpp benchmark_stats.cpp)
