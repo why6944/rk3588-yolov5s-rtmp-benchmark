@@ -176,7 +176,7 @@ P95/P50 比值反映了系统的**可预测性**:
 |------|------|
 | SiLU ONNX | `yolo_silu/yolov5s_silu.onnx` (27.6 MB) |
 | SiLU RKNN | `models/yolov5s_silu_INT8_Normal.rknn` (8.4 MB) |
-| ReLU ONNX | `yolov5s_relu.onnx` (课程提供, 28.9 MB) |
+| ReLU ONNX | `yolov5s_relu.onnx` (社区提供, 28.9 MB) |
 | ReLU RKNN | `models/yolov5s_relu_INT8_Normal.rknn` (7.99 MB) |
 
 ---
