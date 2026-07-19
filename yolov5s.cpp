@@ -107,8 +107,8 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
             LOG_DEBUG("yolo %d initialized RKNN context by full model load.\n", npu_index);
     }
 
-    if(npu_index % 4 == 0)      { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_0); }
-    else if(npu_index % 4 == 1) { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_1); }
+    if(npu_index % 3 == 0)      { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_0); }
+    else if(npu_index % 3 == 1) { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_1); }
     else                        { ret = rknn_set_core_mask(this->context, RKNN_NPU_CORE_2); }
     if (ret != 0)
     {
