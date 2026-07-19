@@ -1,14 +1,14 @@
-#include "thread_poll.h"
+#include "thread_pool.h"
 #include "debug_log.h"
 
-ThreadPoll::ThreadPoll(const char* model_path, int num_threads, bool draw_results)
+ThreadPool::ThreadPool(const char* model_path, int num_threads, bool draw_results)
 {
     run_flag = true;
     draw_results_ = draw_results;
     initialized_ = init(model_path, num_threads);
 }
 
-ThreadPoll::~ThreadPoll()
+ThreadPool::~ThreadPool()
 {
     LOG_DEBUG("Remaining tasks: %zu\n", tasks.size());
 
@@ -20,10 +20,10 @@ ThreadPoll::~ThreadPoll()
         if(t.joinable())
             t.join();
     }
-    LOG_DEBUG("ThreadPoll destroyed.\n");
+    LOG_DEBUG("ThreadPool destroyed.\n");
 }
 
-bool ThreadPoll::init(const char* model_path, int num_threads)
+bool ThreadPool::init(const char* model_path, int num_threads)
 {
     if(num_threads <= 0) num_threads = 1;
 
@@ -35,7 +35,7 @@ bool ThreadPoll::init(const char* model_path, int num_threads)
         auto yolo = std::make_shared<Yolov5s>(model_path, i % 3, shared_context);
         if(!yolo->isInitialized())
         {
-            std::cerr << "[ThreadPoll] failed to initialize RKNN worker " << i
+            std::cerr << "[ThreadPool] failed to initialize RKNN worker " << i
                       << "; stop before starting worker threads.\n";
             yolo_group.clear();
             run_flag = false;
@@ -49,12 +49,12 @@ bool ThreadPoll::init(const char* model_path, int num_threads)
     // 启动 num_threads 个工作线程
     for(int i = 0; i < num_threads; i++)
     {
-        threads.emplace_back(&ThreadPoll::worker, this, i);
+        threads.emplace_back(&ThreadPool::worker, this, i);
     }
     return true;
 }
 
-void ThreadPoll::worker(int id)
+void ThreadPool::worker(int id)
 {
     // -------------------------------------------------------
     // [修改] worker 现在真正使用自己专属的 yolo 实例
@@ -106,18 +106,18 @@ void ThreadPoll::worker(int id)
     LOG_DEBUG("Worker %d exited, remaining tasks: %zu\n", id, tasks.size());
 }
 
-bool ThreadPoll::isInitialized() const
+bool ThreadPool::isInitialized() const
 {
     return initialized_;
 }
 
-std::future<ProcessResult> ThreadPoll::submit_task_async(FrameData frame_data)
+std::future<ProcessResult> ThreadPool::submit_task_async(FrameData frame_data)
 {
     if(!initialized_)
     {
         std::promise<ProcessResult> promise;
         ProcessResult result;
-        result.error_msg = "ThreadPoll is not initialized";
+        result.error_msg = "ThreadPool is not initialized";
         promise.set_value(std::move(result));
         return promise.get_future();
     }

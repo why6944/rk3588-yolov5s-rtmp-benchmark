@@ -23,7 +23,7 @@
 
 #include "SafeQueue.h"
 #include "yolov5s.h"
-#include "thread_poll.h"
+#include "thread_pool.h"
 #include "streamer.h"
 #include "perf_monitor.h"
 #include "benchmark_stats.h"
@@ -701,7 +701,7 @@ void readThreadFuncDmaBuf(CameraDmaBufCapture &cap, int max_frames)
     std::cerr << "[ReadThreadDmaBuf] finished.\n";
 }
 
-void aggregatorThreadFunc(ThreadPoll &npu_pool)
+void aggregatorThreadFunc(ThreadPool &npu_pool)
 {
     int nextWriteIndex = 0;
     std::map<int, std::future<ProcessResult>> tasks_inflight;
@@ -1193,10 +1193,10 @@ int main(int argc, char **argv)
         std::cerr << "[Main] --camera-zero-copy-mpp requires camera dmabuf input, mpp-only/rtmp mode, and --mpp-input-mode fd; using Mat path.\n";
 
     bool draw_results = modeDrawsResults(options.mode) && !camera_zero_copy_mpp;
-    ThreadPoll npu_pool(options.model_path.c_str(), options.thread_count, draw_results);
+    ThreadPool npu_pool(options.model_path.c_str(), options.thread_count, draw_results);
     if(!npu_pool.isInitialized())
     {
-        std::cerr << "Fail to initialize ThreadPoll/RKNN workers.\n";
+        std::cerr << "Fail to initialize ThreadPool/RKNN workers.\n";
         if(writer) writer->release();
         if(use_mpp) close_streamer();
         PerfMonitor::instance().stop();

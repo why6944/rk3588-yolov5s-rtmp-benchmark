@@ -53,3 +53,9 @@ Thumbs.db
 # 其他
 *.bak
 *.backup
+build/
+build-*/
+*.bak2
+*.broken
+*.clean
+*.old

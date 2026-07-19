@@ -26,11 +26,11 @@ struct ProcessResult {
     std::string error_msg;
 };
 
-class ThreadPoll
+class ThreadPool
 {
 public:
-    ThreadPoll(const char* model_path, int num_threads, bool draw_results = true);
-    ~ThreadPoll();
+    ThreadPool(const char* model_path, int num_threads, bool draw_results = true);
+    ~ThreadPool();
 
     std::future<ProcessResult> submit_task_async(FrameData frame_data);
     bool isInitialized() const;

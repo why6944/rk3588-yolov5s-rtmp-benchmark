@@ -56,7 +56,7 @@ v4l2-ctl --list-devices
 | [系统设计与架构](docs/设计文档_系统架构.md) | 模块边界、线程模型、数据流与 DMA-BUF 生命周期 |
 | [API 与运行参数](docs/API文档_运行参数与模块接口.md) | 命令行、运行模式、输入后端和关键 C++ 接口 |
 | [测试报告](docs/测试报告_性能与验证.md) | 性能口径、吞吐、DMA-BUF 对比与限制 |
-| [SiLU vs ReLU A/B 实验](docs/SiLU_vs_ReLU_A-B实验报告.md) | 激活函数对比实验: 延迟、P50/P95、算子融合分析 |
+| [SiLU vs ReLU A/B 实验](docs/AB_REPORT_SiLU_vs_ReLU.md) | 激活函数对比实验: 延迟、P50/P95、算子融合分析 |
 | [模型替换对比](docs/模型替换对比报告.md) | 旧模型→INT8-Normal 替换验证与性能基准 |
 | [Perf 教学与调试](docs/RK3588_perf性能分析教学调试文档.md) | perf 安装、采样、报告解读和实测过程 |
 | [代码问题深度讲解](docs/代码问题深度讲解.md) | 早期并发与预处理问题的分析和修复思路 |
@@ -97,7 +97,7 @@ ReLU 加速根因: SiLU (x * sigmoid(x)) 需要 Sigmoid + Mul 两个独立 NPU �
 
 ### Camera + MPP 端到端
 
-- V4L2 Camera (640x480 MJPEG@30fps) + RGA + RKNN + MPP: **28.1 FPS** (6 线程)
+- V4L2 Camera (640x480 YUYV@30fps) + RGA + RKNN + MPP: **28.1 FPS** (6 线程)
 - rknn_run: 18.4ms, preprocess: 1.77ms, MPP: 2.4ms
 - DMA-BUF 链路: app 进程 CPU 单核等效占用约 **18.3%**
 

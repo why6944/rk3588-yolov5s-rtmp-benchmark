@@ -73,6 +73,9 @@ set(RKNN_API_PATH       ${3DRPARTY_PATH}/librknn_api)
 set(RKNN_INCLUDE_DIRS   ${RKNN_API_PATH}/include)
 # 设置 RKNN 运行时库的路径
 set(RKNN_LIBS           ${RKNN_API_PATH}/${LIB_ARCH}/librknnrt.so)
+if(NOT EXISTS ${RKNN_LIBS})
+    message(FATAL_ERROR "librknnrt.so not found at ${RKNN_LIBS}. Please copy 3rdparty/librknn_api/aarch64/librknnrt.so into the repo.")
+endif()
 
 # 设置 RGA（Rockchip Graphic Accelerator）库的路径
 set(RGA_PATH            ${3DRPARTY_PATH}/rga/${DEVICE_NAME})
@@ -80,6 +83,9 @@ set(RGA_PATH            ${3DRPARTY_PATH}/rga/${DEVICE_NAME})
 set(RGA_INCLUDE_DIRS    ${RGA_PATH}/include)
 # 设置 RGA 库的路径
 set(RGA_LIBS            ${RGA_PATH}/lib/Linux/${LIB_ARCH}/librga.so)
+if(NOT EXISTS ${RGA_LIBS})
+    message(FATAL_ERROR "librga.so not found at ${RGA_LIBS}. Please copy 3rdparty/rga/RK3588/lib/Linux/aarch64/librga.so into the repo.")
+endif()
 
 # 将头文件路径添加到编译器的搜索路径。
 include_directories(
@@ -97,7 +103,7 @@ include_directories(
 add_executable(app 
     main.cpp 
     camera_dmabuf.cpp
-    thread_poll.cpp
+    thread_pool.cpp
     yolov5s.cpp
     post_process.cpp
     post_process_common.cpp
@@ -164,7 +170,7 @@ target_link_libraries(benchmark_postprocess
 add_executable(app_neon
     main.cpp
     camera_dmabuf.cpp
-    thread_poll.cpp
+    thread_pool.cpp
     yolov5s.cpp
     post_process_neon_full.cpp
     streamer.c
