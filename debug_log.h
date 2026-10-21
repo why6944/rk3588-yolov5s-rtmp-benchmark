@@ -12,6 +12,7 @@ extern float g_box_threshold;
 extern float g_nms_threshold;
 extern int g_rknn_input_fd_mode;
 extern int g_rknn_output_mem_mode;
+extern int g_cpu_preprocess_mode;
 
 #ifdef __cplusplus
 }

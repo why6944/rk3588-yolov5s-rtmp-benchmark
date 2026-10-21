@@ -130,6 +130,7 @@ std::future<ProcessResult> ThreadPool::submit_task_async(FrameData frame_data)
             try
             {
                 LOG_DEBUG("worker get task %d\n", frame_data.index);
+                frame_data.latency.worker_start_ns = latencyMonotonicNowNs();
 
                 if(!frame_data.hasMat() && !frame_data.hasDmaBuf())
                 {
@@ -148,6 +149,8 @@ std::future<ProcessResult> ThreadPool::submit_task_async(FrameData frame_data)
                 }
                 if(draw_results && frame_data.hasMat())
                     yolo->draw_result(frame_data.frame, detections);
+
+                frame_data.latency.inference_end_ns = latencyMonotonicNowNs();
 
                 result.frame_data         = std::move(frame_data);
                 result.detection_results  = detections;

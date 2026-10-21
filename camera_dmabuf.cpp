@@ -14,6 +14,47 @@
 
 #include "RgaUtils.h"
 
+#ifndef DMA_HEAP_IOC_MAGIC
+#define DMA_HEAP_IOC_MAGIC 'H'
+#endif
+
+struct dma_heap_allocation_data_local {
+    uint64_t len;
+    uint32_t fd;
+    uint32_t fd_flags;
+    uint64_t heap_flags;
+};
+
+#ifndef DMA_HEAP_IOCTL_ALLOC
+#define DMA_HEAP_IOCTL_ALLOC _IOWR(DMA_HEAP_IOC_MAGIC, 0x0, struct dma_heap_allocation_data_local)
+#endif
+
+static int allocateCameraDmaHeapFd(size_t size)
+{
+    const char *heap_paths[] = {
+        "/dev/dma_heap/system-uncached",
+        "/dev/dma_heap/cma-uncached",
+        "/dev/dma_heap/system",
+        "/dev/dma_heap/cma"
+    };
+
+    for (const char *path : heap_paths) {
+        int heap_fd = ::open(path, O_RDWR | O_CLOEXEC);
+        if (heap_fd < 0)
+            continue;
+
+        dma_heap_allocation_data_local data{};
+        data.len = size;
+        data.fd_flags = O_RDWR | O_CLOEXEC;
+        if (::ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &data) == 0) {
+            ::close(heap_fd);
+            return static_cast<int>(data.fd);
+        }
+        ::close(heap_fd);
+    }
+    return -1;
+}
+
 CameraDmaBufCapture::~CameraDmaBufCapture()
 {
     close();
@@ -149,6 +190,13 @@ bool CameraDmaBufCapture::setupBuffers()
     }
 
     buffers_.resize(req.count);
+    {
+        std::lock_guard<std::mutex> lock(buffer_state_mutex_);
+        client_holds_buffer_.assign(req.count, false);
+        outstanding_buffers_ = 0;
+        // Keep one buffer queued in the driver, so the UVC producer never runs dry.
+        max_outstanding_buffers_ = req.count - 1;
+    }
     for (uint32_t i = 0; i < req.count; ++i) {
         v4l2_buffer buf{};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -177,13 +225,11 @@ bool CameraDmaBufCapture::setupBuffers()
                 return false;
             }
             buffers_[i].dmabuf_fd = exp.fd;
-            // Create this DMA-BUF handle lazily after the first DQBUF, then reuse it
-            // for NPU/MPP access until close().
-            buffers_[i].rga_handle = 0;
-            // The BGR/OpenCV output copy uses the stable mmap RGA access path.
-            buffers_[i].rga_bgr_handle = importbuffer_virtualaddr(buffers_[i].start, buffers_[i].length);
-            if (!buffers_[i].rga_bgr_handle) {
-                std::cerr << "[CameraDmaBuf] import mmap camera buffer " << i << " failed\n";
+            // The UVC buffer must reach RGA through its exported DMA-BUF fd.
+            // Importing the V4L2 mmap virtual address can fault in this kernel's RGA DMA sync path.
+            buffers_[i].rga_handle = importbuffer_fd(exp.fd, buffers_[i].length);
+            if (!buffers_[i].rga_handle) {
+                std::cerr << "[CameraDmaBuf] import exported DMA-BUF " << i << " failed\n";
                 return false;
             }
         } else {
@@ -196,10 +242,22 @@ bool CameraDmaBufCapture::setupBuffers()
     }
 
     if (copy_to_mat_) {
-        bgr_buf_.resize(static_cast<size_t>(width_) * height_ * 3);
-        bgr_handle_ = importbuffer_virtualaddr(bgr_buf_.data(), bgr_buf_.size());
+        bgr_buf_size_ = static_cast<size_t>(width_) * height_ * 3;
+        bgr_dmabuf_fd_ = allocateCameraDmaHeapFd(bgr_buf_size_);
+        if (bgr_dmabuf_fd_ < 0) {
+            std::cerr << "[CameraDmaBuf] DMA heap allocation for RGB output failed\n";
+            return false;
+        }
+        void *mapped = ::mmap(nullptr, bgr_buf_size_, PROT_READ | PROT_WRITE,
+                              MAP_SHARED, bgr_dmabuf_fd_, 0);
+        if (mapped == MAP_FAILED) {
+            std::cerr << "[CameraDmaBuf] DMA heap RGB output mmap failed: " << strerror(errno) << "\n";
+            return false;
+        }
+        bgr_buf_ = static_cast<uint8_t *>(mapped);
+        bgr_handle_ = importbuffer_fd(bgr_dmabuf_fd_, bgr_buf_size_);
         if (!bgr_handle_) {
-            std::cerr << "[CameraDmaBuf] importbuffer_virtualaddr output failed\n";
+            std::cerr << "[CameraDmaBuf] import DMA-BUF RGB output failed\n";
             return false;
         }
     }
@@ -241,6 +299,15 @@ bool CameraDmaBufCapture::queueBuffer(uint32_t index)
         std::cerr << "[CameraDmaBuf] VIDIOC_QBUF " << index << " failed: " << strerror(errno) << "\n";
         return false;
     }
+    {
+        std::lock_guard<std::mutex> lock(buffer_state_mutex_);
+        if (index < client_holds_buffer_.size() && client_holds_buffer_[index]) {
+            client_holds_buffer_[index] = false;
+            if (outstanding_buffers_ > 0)
+                --outstanding_buffers_;
+            buffer_available_cv_.notify_one();
+        }
+    }
     return true;
 }
 
@@ -281,27 +348,13 @@ bool CameraDmaBufCapture::read(cv::Mat &frame)
     bool ok = false;
     if (buf.index < buffers_.size()) {
         Buffer &src_buffer = buffers_[buf.index];
-        // Create the RGA handle after the V4L2 buffer has been DQBUF-ed once.
-        // Keep it for this V4L2 buffer's lifetime; repeated import/release per frame
-        // causes corruption on this camera's exported DMA-BUF path.
-        if (export_dmabuf_ && !src_buffer.rga_handle) {
-            src_buffer.rga_handle = importbuffer_fd(src_buffer.dmabuf_fd, src_buffer.length);
-            if (!src_buffer.rga_handle) {
-                std::cerr << "[CameraDmaBuf] import current camera fd failed: "
-                          << src_buffer.dmabuf_fd << "\n";
-            }
-        }
-
-        rga_buffer_handle_t bgr_src_handle = export_dmabuf_
-            ? src_buffer.rga_bgr_handle
-            : src_buffer.rga_handle;
-        if (bgr_src_handle) {
-            rga_buffer_t src = wrapbuffer_handle(bgr_src_handle, width_, height_, RK_FORMAT_YUYV_422);
+        if (src_buffer.rga_handle) {
+            rga_buffer_t src = wrapbuffer_handle(src_buffer.rga_handle, width_, height_, RK_FORMAT_YUYV_422);
             rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_RGB_888);
             int check = imcheck(src, dst, {}, {});
             int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_RGB_888) : check;
             if (ret == IM_STATUS_SUCCESS) {
-                cv::Mat rgb(height_, width_, CV_8UC3, bgr_buf_.data());
+                cv::Mat rgb(height_, width_, CV_8UC3, bgr_buf_);
                 cv::cvtColor(rgb, frame, cv::COLOR_RGB2BGR);
                 ok = true;
             } else {
@@ -319,36 +372,53 @@ bool CameraDmaBufCapture::readFrameData(FrameData &frame_data, int frame_index)
 {
     if (!isOpened()) return false;
 
+    {
+        std::unique_lock<std::mutex> lock(buffer_state_mutex_);
+        buffer_available_cv_.wait(lock, [this] {
+            return !streaming_ || outstanding_buffers_ < max_outstanding_buffers_;
+        });
+        if (!streaming_)
+            return false;
+    }
+
     v4l2_buffer buf{};
     if (!dequeueBuffer(buf)) return false;
+    const int64_t dqbuf_ns = latencyMonotonicNowNs();
+    const int64_t v4l2_timestamp_ns = static_cast<int64_t>(buf.timestamp.tv_sec) * 1000000000LL +
+                                      static_cast<int64_t>(buf.timestamp.tv_usec) * 1000LL;
+    const bool v4l2_timestamp_monotonic =
+        (buf.flags & V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC) != 0;
 
     if (buf.index >= buffers_.size()) {
         queueBuffer(buf.index);
         return false;
     }
 
-    Buffer &src_buffer = buffers_[buf.index];
-    if (export_dmabuf_ && !src_buffer.rga_handle) {
-        src_buffer.rga_handle = importbuffer_fd(src_buffer.dmabuf_fd, src_buffer.length);
-        if (!src_buffer.rga_handle) {
-            std::cerr << "[CameraDmaBuf] import current camera fd failed: "
-                      << src_buffer.dmabuf_fd << "\n";
-            queueBuffer(buf.index);
-            return false;
+    bool duplicate_buffer = false;
+    {
+        std::lock_guard<std::mutex> lock(buffer_state_mutex_);
+        duplicate_buffer = buf.index >= client_holds_buffer_.size() ||
+                           client_holds_buffer_[buf.index];
+        if (!duplicate_buffer) {
+            client_holds_buffer_[buf.index] = true;
+            ++outstanding_buffers_;
         }
     }
+    if (duplicate_buffer) {
+        std::cerr << "[CameraDmaBuf] unexpected duplicate DQBUF index " << buf.index << "\n";
+        queueBuffer(buf.index);
+        return false;
+    }
 
+    Buffer &src_buffer = buffers_[buf.index];
     cv::Mat cloned_frame;
     if (copy_to_mat_) {
-        rga_buffer_handle_t bgr_src_handle = export_dmabuf_
-            ? src_buffer.rga_bgr_handle
-            : src_buffer.rga_handle;
-        if (!bgr_src_handle) {
+        if (!src_buffer.rga_handle) {
             std::cerr << "[CameraDmaBuf] BGR source handle is unavailable\n";
             queueBuffer(buf.index);
             return false;
         }
-        rga_buffer_t src = wrapbuffer_handle(bgr_src_handle, width_, height_, RK_FORMAT_YUYV_422);
+        rga_buffer_t src = wrapbuffer_handle(src_buffer.rga_handle, width_, height_, RK_FORMAT_YUYV_422);
         rga_buffer_t dst = wrapbuffer_handle(bgr_handle_, width_, height_, RK_FORMAT_RGB_888);
         int check = imcheck(src, dst, {}, {});
         int ret = check == IM_STATUS_NOERROR ? imcvtcolor(src, dst, RK_FORMAT_YUYV_422, RK_FORMAT_RGB_888) : check;
@@ -358,7 +428,7 @@ bool CameraDmaBufCapture::readFrameData(FrameData &frame_data, int frame_index)
             return false;
         }
 
-        cv::Mat rgb(height_, width_, CV_8UC3, bgr_buf_.data());
+        cv::Mat rgb(height_, width_, CV_8UC3, bgr_buf_);
         cv::cvtColor(rgb, cloned_frame, cv::COLOR_RGB2BGR);
     }
 
@@ -388,24 +458,39 @@ bool CameraDmaBufCapture::readFrameData(FrameData &frame_data, int frame_index)
         frame_data = FrameData::fromCameraDmaBufMat(std::move(cloned_frame), std::move(ref), frame_index);
     else
         frame_data = FrameData::fromCameraMmapMat(std::move(cloned_frame), std::move(ref), frame_index);
+    frame_data.latency.frame_index = frame_index;
+    frame_data.latency.dqbuf_ns = dqbuf_ns;
+    frame_data.latency.v4l2_timestamp_ns = v4l2_timestamp_ns;
+    frame_data.latency.v4l2_timestamp_monotonic = v4l2_timestamp_monotonic;
     return true;
 }
 
 void CameraDmaBufCapture::close()
 {
     stopStream();
+    {
+        std::lock_guard<std::mutex> lock(buffer_state_mutex_);
+        client_holds_buffer_.clear();
+        outstanding_buffers_ = 0;
+        max_outstanding_buffers_ = 0;
+    }
+    buffer_available_cv_.notify_all();
 
     if (bgr_handle_) {
         releasebuffer_handle(bgr_handle_);
         bgr_handle_ = 0;
     }
-    bgr_buf_.clear();
+    if (bgr_buf_) {
+        ::munmap(bgr_buf_, bgr_buf_size_);
+        bgr_buf_ = nullptr;
+    }
+    bgr_buf_size_ = 0;
+    if (bgr_dmabuf_fd_ >= 0) {
+        ::close(bgr_dmabuf_fd_);
+        bgr_dmabuf_fd_ = -1;
+    }
 
     for (auto &buffer : buffers_) {
-        if (buffer.rga_bgr_handle) {
-            releasebuffer_handle(buffer.rga_bgr_handle);
-            buffer.rga_bgr_handle = 0;
-        }
         if (buffer.rga_handle) {
             releasebuffer_handle(buffer.rga_handle);
             buffer.rga_handle = 0;

@@ -30,6 +30,7 @@
 #include "debug_log.h"
 #include "camera_dmabuf.h"
 #include "frame_data.h"
+#include "latency_measurement.h"
 
 #include "rga.h"
 #include "drmrga.h"
@@ -66,6 +67,7 @@ int g_skip_sigmoid = 0;
 int g_rknn_input_fd_mode = 0;
 int g_rknn_output_mem_mode = 0;
 int g_mpp_input_fd_mode = 0;
+int g_cpu_preprocess_mode = 0;
 }
 
 enum class RunMode
@@ -113,8 +115,14 @@ struct RunOptions
     std::string snapshot_output = "../debug_records/snapshot.png";
     bool camera_zero_copy_mpp = false;
     PostProcessMode postprocess_mode = PostProcessMode::Scalar;
+    bool cpu_preprocess = false;
+    std::string latency_csv;
+    int latency_warmup = 0;
+    bool latency_summary = false;
     bool show_help = false;
 };
+
+LatencyCollector g_latency_collector;
 
 static const char* modeName(RunMode mode)
 {
@@ -154,6 +162,8 @@ static std::string runLabel(const RunOptions &options)
         label += "-camfd";
     else if(options.input_source == InputSource::Camera && options.input_backend == InputBackend::V4L2Mmap)
         label += "-cammmap";
+    if(options.input_source == InputSource::Camera && options.cpu_preprocess)
+        label += "-cpupre";
     if(g_rknn_input_fd_mode)
         label += "-rknnfd";
     if(g_rknn_output_mem_mode)
@@ -233,6 +243,7 @@ static void printUsage(const char *prog)
         << "  --input-backend opencv|v4l2-mmap|dmabuf\n"
         << "                                      camera only, default: opencv\n"
         << "  --video-path PATH                 default: ../video.mp4\n"
+        << "  --preprocess-backend rga|cpu      default: rga; cpu is a no-RGA benchmark path\n"
         << "  --camera-id N                     default: 0 (/dev/video0)\n"
         << "  --camera-width W                  default: 1280\n"
         << "  --camera-height H                 default: 720\n"
@@ -248,6 +259,9 @@ static void printUsage(const char *prog)
         << "  --camera-zero-copy-mpp             camera DMA-BUF -> RGA -> MPP path; boxes only, no AVI\n"
         << "  --model-path PATH                 default: ../model/yolov5s_relu_INT8_Normal.rknn\n"
         << "  --warmup N                        default: 50\n"
+        << "  --latency-csv PATH                write per-frame latency trace CSV\n"
+        << "  --latency-warmup N                exclude first N frames from latency statistics\n"
+        << "  --latency-summary                 print latency percentiles and stage breakdown\n"
         << "  --skip-sigmoid                    force skip sigmoid for activated outputs\n"
         << "  --apply-sigmoid                   force sigmoid for legacy/logit outputs\n"
         << "  --rtmp-url URL\n";
@@ -281,6 +295,14 @@ static RunOptions parseOptions(int argc, char **argv)
         else if(std::strncmp(argv[i], "--input-backend=", 16) == 0)
         {
             options.input_backend = parseInputBackend(argv[i] + 16);
+        }
+        else if(std::strcmp(argv[i], "--preprocess-backend") == 0 && i + 1 < argc)
+        {
+            options.cpu_preprocess = std::strcmp(argv[++i], "cpu") == 0;
+        }
+        else if(std::strncmp(argv[i], "--preprocess-backend=", 21) == 0)
+        {
+            options.cpu_preprocess = std::strcmp(argv[i] + 21, "cpu") == 0;
         }
         else if((std::strcmp(argv[i], "--video-path") == 0 || std::strcmp(argv[i], "--video") == 0) && i + 1 < argc)
         {
@@ -436,6 +458,26 @@ static RunOptions parseOptions(int argc, char **argv)
         {
             options.warmup = std::atoi(argv[i] + 9);
         }
+        else if(std::strcmp(argv[i], "--latency-csv") == 0 && i + 1 < argc)
+        {
+            options.latency_csv = argv[++i];
+        }
+        else if(std::strncmp(argv[i], "--latency-csv=", 14) == 0)
+        {
+            options.latency_csv = argv[i] + 14;
+        }
+        else if(std::strcmp(argv[i], "--latency-warmup") == 0 && i + 1 < argc)
+        {
+            options.latency_warmup = std::atoi(argv[++i]);
+        }
+        else if(std::strncmp(argv[i], "--latency-warmup=", 17) == 0)
+        {
+            options.latency_warmup = std::atoi(argv[i] + 17);
+        }
+        else if(std::strcmp(argv[i], "--latency-summary") == 0)
+        {
+            options.latency_summary = true;
+        }
         else if(std::strcmp(argv[i], "--skip-sigmoid") == 0)
         {
             options.skip_sigmoid_override = 1;
@@ -480,6 +522,7 @@ static RunOptions parseOptions(int argc, char **argv)
     }
     if(options.thread_count <= 0) options.thread_count = 1;
     if(options.loops <= 0) options.loops = 1;
+    if(options.latency_warmup < 0) options.latency_warmup = 0;
 
     const bool relu_model = options.model_path.find("relu") != std::string::npos;
     g_skip_sigmoid = options.skip_sigmoid_override >= 0
@@ -706,6 +749,7 @@ void readThreadFunc(cv::VideoCapture &cap, int max_frames)
             break;
         }
         FrameData data = FrameData::fromMat(std::move(frame), idx++);
+        data.latency.read_enqueue_ns = latencyMonotonicNowNs();
         g_readQueue.enqueue(std::move(data));
     }
     g_readFinish = true;
@@ -724,6 +768,7 @@ void readThreadFuncDmaBuf(CameraDmaBufCapture &cap, int max_frames)
             break;
         }
         idx++;
+        data.latency.read_enqueue_ns = latencyMonotonicNowNs();
         g_readQueue.enqueue(std::move(data));
     }
     g_readFinish = true;
@@ -742,6 +787,7 @@ void aggregatorThreadFunc(ThreadPool &npu_pool)
         {
             if(g_readQueue.dequeue(inputFD))
             {
+                inputFD.latency.aggregator_dequeue_ns = latencyMonotonicNowNs();
                 int frame_index = inputFD.index;
                 auto fut = npu_pool.submit_task_async(std::move(inputFD));
                 tasks_inflight[frame_index] = std::move(fut);
@@ -757,6 +803,8 @@ void aggregatorThreadFunc(ThreadPool &npu_pool)
                 ProcessResult result = it->second.get();
 
                 result.frame_data.index = nextWriteIndex;
+                result.frame_data.latency.frame_index = nextWriteIndex;
+                result.frame_data.latency.aggregator_ready_ns = latencyMonotonicNowNs();
                 g_writeQueue.enqueue(result);
 
                 tasks_inflight.erase(it);
@@ -791,8 +839,10 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
     int nv12_size = g_hor_stride * g_ver_stride * 3 / 2;
 
     char *bgr_write_buf = nullptr;
+    uint8_t *bgr_dma_map = nullptr;
     uint8_t *nv12_buf = nullptr;
     uint8_t *nv12_dma_map = nullptr;
+    int bgr_dma_fd = -1;
     int nv12_dma_fd = -1;
     bool mpp_fd_enabled = use_mpp && g_mpp_input_fd_mode;
     std::string nv12_heap_path;
@@ -801,53 +851,33 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
 
     if(use_mpp)
     {
-        bgr_write_buf = (char *)malloc(bgr_size);
-        bgr_handle    = importbuffer_virtualaddr(bgr_write_buf, bgr_size);
+        bgr_dma_fd = allocateDmaHeapFd(bgr_size);
+        nv12_dma_fd = allocateDmaHeapFd(nv12_size, &nv12_heap_path);
+        if (bgr_dma_fd >= 0)
+            bgr_handle = importbuffer_fd(bgr_dma_fd, bgr_size);
+        if (nv12_dma_fd >= 0)
+            nv12_handle = importbuffer_fd(nv12_dma_fd, nv12_size);
 
-        if(mpp_fd_enabled)
-        {
-            nv12_dma_fd = allocateDmaHeapFd(nv12_size, &nv12_heap_path);
-            if(nv12_dma_fd >= 0)
-                nv12_handle = importbuffer_fd(nv12_dma_fd, nv12_size);
-
-            if(nv12_dma_fd < 0 || nv12_handle == 0)
-            {
-                printf("[WriteThread] MPP fd path init failed, fallback to copy path. fd=%d handle=%u\n",
-                       nv12_dma_fd, nv12_handle);
-                if(nv12_handle) { releasebuffer_handle(nv12_handle); nv12_handle = 0; }
-                if(nv12_dma_fd >= 0) { close(nv12_dma_fd); nv12_dma_fd = -1; }
-                mpp_fd_enabled = false;
+        if (bgr_handle && nv12_handle) {
+            void *bgr_mapped = mmap(nullptr, bgr_size, PROT_READ | PROT_WRITE,
+                                    MAP_SHARED, bgr_dma_fd, 0);
+            void *nv12_mapped = mmap(nullptr, nv12_size, PROT_READ | PROT_WRITE,
+                                     MAP_SHARED, nv12_dma_fd, 0);
+            if (bgr_mapped != MAP_FAILED && nv12_mapped != MAP_FAILED) {
+                bgr_dma_map = static_cast<uint8_t *>(bgr_mapped);
+                bgr_write_buf = reinterpret_cast<char *>(bgr_dma_map);
+                nv12_dma_map = static_cast<uint8_t *>(nv12_mapped);
+                nv12_buf = nv12_dma_map;
+            } else {
+                if (bgr_mapped != MAP_FAILED) munmap(bgr_mapped, bgr_size);
+                if (nv12_mapped != MAP_FAILED) munmap(nv12_mapped, nv12_size);
+                releasebuffer_handle(bgr_handle); bgr_handle = 0;
+                releasebuffer_handle(nv12_handle); nv12_handle = 0;
             }
-            else
-            {
-                printf("[WriteThread] MPP fd path enabled, heap=%s, fd=%d, nv12_size=%d\n",
-                       nv12_heap_path.c_str(), nv12_dma_fd, nv12_size);
-                void *mapped = mmap(NULL, nv12_size, PROT_READ | PROT_WRITE,
-                                    MAP_SHARED, nv12_dma_fd, 0);
-                if(mapped == MAP_FAILED)
-                {
-                    printf("[WriteThread] MPP fd buffer mmap failed, fallback to Mat/copy path.\n");
-                    releasebuffer_handle(nv12_handle);
-                    nv12_handle = 0;
-                    close(nv12_dma_fd);
-                    nv12_dma_fd = -1;
-                    mpp_fd_enabled = false;
-                }
-                else
-                {
-                    nv12_dma_map = static_cast<uint8_t *>(mapped);
-                }
-            }
-        }
-
-        if(!mpp_fd_enabled)
-        {
-            nv12_buf    = (uint8_t *)malloc(nv12_size);
-            nv12_handle = importbuffer_virtualaddr(nv12_buf, nv12_size);
         }
 
         if(bgr_handle == 0 || nv12_handle == 0)
-            printf("[WriteThread] RGA buffer prealloc failed!\n");
+            printf("[WriteThread] DMA-BUF RGA buffer prealloc failed!\n");
     }
 
     while(true)
@@ -863,6 +893,7 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
         }
 
         FrameData &outputFD = output_result.frame_data;
+        outputFD.latency.write_dequeue_ns = latencyMonotonicNowNs();
         const bool direct_camera_mpp = camera_zero_copy_mpp && mpp_fd_enabled &&
                                        outputFD.hasCameraBuffer();
 
@@ -881,6 +912,7 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
         if(use_mpp)
         {
             auto mpp_start = std::chrono::high_resolution_clock::now();
+            outputFD.latency.rga_start_ns = latencyMonotonicNowNs();
             bool converted = false;
             if(direct_camera_mpp)
             {
@@ -897,15 +929,19 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
                     outputFD.frame.cols, outputFD.frame.rows
                 );
             }
+            outputFD.latency.rga_end_ns = latencyMonotonicNowNs();
 
             int ret = -1;
             if(converted)
             {
+                outputFD.latency.mpp_submit_ns = latencyMonotonicNowNs();
                 if(mpp_fd_enabled)
                     ret = process_frame_fd(nv12_dma_fd, nv12_size);
                 else
                     ret = process_frame(nv12_buf, nv12_size);
             }
+            outputFD.latency.mpp_complete_ns = latencyMonotonicNowNs();
+            outputFD.latency.mpp_success = converted && ret == 0;
 
             if(ret != 0)
                 printf("[WriteThread] MPP process frame failed, index=%d, fd_mode=%d\n",
@@ -914,6 +950,7 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
             auto mpp_end = std::chrono::high_resolution_clock::now();
             BenchmarkStats::instance().record_mpp(
                 std::chrono::duration_cast<std::chrono::microseconds>(mpp_end - mpp_start).count());
+            g_latency_collector.record(outputFD.latency);
         }
     }
 
@@ -921,9 +958,9 @@ void writeThreadFunc(cv::VideoWriter *writer, RunMode mode, bool camera_zero_cop
         release_frame_fd();
     if(bgr_handle)  releasebuffer_handle(bgr_handle);
     if(nv12_handle) releasebuffer_handle(nv12_handle);
-    if(bgr_write_buf) free(bgr_write_buf);
-    if(nv12_buf) free(nv12_buf);
+    if(bgr_dma_map) munmap(bgr_dma_map, bgr_size);
     if(nv12_dma_map) munmap(nv12_dma_map, nv12_size);
+    if(bgr_dma_fd >= 0) close(bgr_dma_fd);
     if(nv12_dma_fd >= 0) close(nv12_dma_fd);
 
     std::cerr << "[WriteThread] finished.\n";
@@ -1113,6 +1150,15 @@ int main(int argc, char **argv)
         printUsage(argv[0]);
         return 0;
     }
+    g_latency_collector.configure(options.latency_csv, options.latency_warmup,
+                                  options.latency_summary, options.loops);
+
+    g_cpu_preprocess_mode = options.cpu_preprocess ? 1 : 0;
+    if(g_cpu_preprocess_mode && g_rknn_input_fd_mode)
+    {
+        std::cerr << "[Main] --preprocess-backend cpu requires --rknn-input-mode copy.\n";
+        return -1;
+    }
 
     std::string outPath = "../output.avi";
     set_post_process_mode(options.postprocess_mode);
@@ -1130,6 +1176,8 @@ int main(int argc, char **argv)
               << ", rknn_input_mode=" << (g_rknn_input_fd_mode ? "fd" : "copy")
               << ", rknn_output_mode=" << (g_rknn_output_mem_mode ? "mem" : "copy")
               << ", mpp_input_mode=" << (g_mpp_input_fd_mode ? "fd" : "copy")
+              << ", preprocess_backend=" << (g_cpu_preprocess_mode ? "cpu" : "rga")
+              << ", latency_trace=" << (g_latency_collector.enabled() ? "on" : "off")
               << ", model_path=" << options.model_path
               << ", skip_sigmoid=" << g_skip_sigmoid
               << ", postprocess=" << post_process_mode_name();
@@ -1251,6 +1299,8 @@ int main(int argc, char **argv)
 
     g_readQueue.stop();
     g_writeQueue.stop();
+
+    g_latency_collector.finalize();
 
     if(writer)
         writer->release();

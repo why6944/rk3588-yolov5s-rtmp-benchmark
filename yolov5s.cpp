@@ -186,6 +186,18 @@ Yolov5s::Yolov5s(const char* model_path, int npu_index, rknn_context* shared_con
     int dst_size = model_height * model_width * model_channel;
     rga_dst_size_ = dst_size;
 
+    if(g_cpu_preprocess_mode)
+    {
+        cpu_input_buf_.resize(dst_size);
+        if(cpu_input_buf_.size() != static_cast<size_t>(dst_size))
+        {
+            printf("[Yolov5s] CPU input buffer allocation failed.\n");
+            return;
+        }
+        initialized_ = true;
+        return;
+    }
+
     if(g_rknn_input_fd_mode && init_rknn_input_fd_buffer(dst_size))
     {
         LOG_DEBUG("[yolo %d] rknn input fd buffer enabled, size=%d bytes\n", npu_index, dst_size);
@@ -630,6 +642,36 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
     long long pre_copy_us = 0;
     long long pre_color_us = 0;
     long long pre_resize_us = 0;
+    char *model_input_buf = rga_dst_buf_;
+
+    if(g_cpu_preprocess_mode)
+    {
+        // Benchmark-only CPU preprocessing path: no DMA-BUF and no RGA operation.
+        this->img_width = orig_img.cols;
+        this->img_height = orig_img.rows;
+        const size_t source_size = static_cast<size_t>(img_width) * img_height * 3;
+        const size_t input_size = static_cast<size_t>(resize_width) * resize_height * resize_channel;
+        if(cpu_rgb_buf_.size() != source_size)
+            cpu_rgb_buf_.resize(source_size);
+        if(cpu_input_buf_.size() != input_size)
+            cpu_input_buf_.resize(input_size);
+
+        cv::Mat rgb(img_height, img_width, CV_8UC3, cpu_rgb_buf_.data());
+        cv::Mat input_rgb(resize_height, resize_width, CV_8UC3, cpu_input_buf_.data());
+
+        auto color_start = std::chrono::high_resolution_clock::now();
+        cv::cvtColor(orig_img, rgb, cv::COLOR_BGR2RGB);
+        auto color_end = std::chrono::high_resolution_clock::now();
+        pre_color_us = std::chrono::duration_cast<std::chrono::microseconds>(color_end - color_start).count();
+
+        auto resize_start = std::chrono::high_resolution_clock::now();
+        cv::resize(rgb, input_rgb, cv::Size(resize_width, resize_height), 0.0, 0.0, cv::INTER_LINEAR);
+        auto resize_end = std::chrono::high_resolution_clock::now();
+        pre_resize_us = std::chrono::duration_cast<std::chrono::microseconds>(resize_end - resize_start).count();
+        model_input_buf = reinterpret_cast<char *>(cpu_input_buf_.data());
+    }
+    else
+    {
 
     // -------------------------------------------------------
     // [修改] 统一处理 padding 和非 padding 两种情况
@@ -721,6 +763,7 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
         printf("%d, resize error! %s\n", __LINE__, imStrError((IM_STATUS)ret));
         ret = -1;
     }
+    }
 
     auto end = std::chrono::high_resolution_clock::now();
     long long preprocess_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
@@ -736,7 +779,7 @@ int Yolov5s::inference_image(const Mat& orig_img, detect_result_group_t &result_
     inputs[0].size        = model_height * model_width * model_channel;
     inputs[0].pass_through = false;
     inputs[0].fmt         = RKNN_TENSOR_NHWC;
-    inputs[0].buf         = rga_dst_buf_;
+    inputs[0].buf         = model_input_buf;
     auto input_set_start = std::chrono::high_resolution_clock::now();
     if(!rknn_input_fd_enabled_)
         ret = rknn_inputs_set(context, inputs_num, inputs);

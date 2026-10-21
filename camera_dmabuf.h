@@ -4,6 +4,8 @@
 #include <opencv2/opencv.hpp>
 
 #include <linux/videodev2.h>
+#include <condition_variable>
+#include <mutex>
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
@@ -49,10 +51,8 @@ private:
         void *start = nullptr;
         size_t length = 0;
         int dmabuf_fd = -1;
-        // Lazily imported DMA-BUF handle used by the NPU/MPP-oriented path.
+        // Exported V4L2 DMA-BUF imported once and shared by all RGA consumers.
         rga_buffer_handle_t rga_handle = 0;
-        // mmap virtual-address handle used only to make the OpenCV BGR copy.
-        rga_buffer_handle_t rga_bgr_handle = 0;
     };
 
     static int xioctl(int fd, unsigned long request, void *arg);
@@ -74,7 +74,14 @@ private:
     int bytesperline_ = 0;
     std::string actual_format_;
     std::vector<Buffer> buffers_;
-    std::vector<uint8_t> bgr_buf_;
+    std::vector<bool> client_holds_buffer_;
+    size_t outstanding_buffers_ = 0;
+    size_t max_outstanding_buffers_ = 0;
+    std::mutex buffer_state_mutex_;
+    std::condition_variable buffer_available_cv_;
+    uint8_t *bgr_buf_ = nullptr;
+    size_t bgr_buf_size_ = 0;
+    int bgr_dmabuf_fd_ = -1;
     rga_buffer_handle_t bgr_handle_ = 0;
     bool streaming_ = false;
     bool export_dmabuf_ = true;

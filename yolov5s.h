@@ -66,6 +66,8 @@ private:
     std::vector<void*>    rknn_output_prealloc_bufs_;
     std::vector<uint32_t> rknn_output_prealloc_sizes_;
     bool                  rknn_output_mem_enabled_ = false;
+    std::vector<unsigned char> cpu_rgb_buf_;
+    std::vector<unsigned char> cpu_input_buf_;
     int                 rga_cached_img_w_   = 0;      // 已分配的原图宽（用于判断是否要重新分配）
     int                 rga_cached_img_h_   = 0;      // 已分配的原图高
 

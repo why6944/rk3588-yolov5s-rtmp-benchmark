@@ -11,6 +11,7 @@
 #include <opencv2/core.hpp>
 
 #include "rga.h"
+#include "latency_measurement.h"
 
 enum class FrameStorageType {
     Mat,
@@ -41,6 +42,7 @@ struct DmaBufFrameRef {
 
 struct FrameData {
     int index = -1;
+    FrameLatencyTrace latency;
     cv::Mat frame;
     FrameStorageType storage = FrameStorageType::Mat;
     std::shared_ptr<DmaBufFrameRef> dmabuf;
@@ -49,6 +51,7 @@ struct FrameData {
     {
         FrameData data;
         data.index = frame_index;
+        data.latency.frame_index = frame_index;
         data.frame = std::move(mat);
         data.storage = FrameStorageType::Mat;
         return data;
@@ -80,6 +83,7 @@ struct FrameData {
     {
         FrameData data;
         data.index = frame_index;
+        data.latency.frame_index = frame_index;
         data.storage = FrameStorageType::CameraDmaBuf;
         data.dmabuf = std::move(ref);
         return data;
