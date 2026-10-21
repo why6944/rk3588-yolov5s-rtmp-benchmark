@@ -9,7 +9,7 @@
 #include <string.h>
 #include <vector>
 #include <stdint.h>
-#include "3rdparty/librknn_api/include/rknn_api.h"
+#include "rknn_api.h"
 
 #include "RgaUtils.h"
 #include "im2d.h"

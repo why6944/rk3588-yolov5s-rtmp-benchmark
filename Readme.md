@@ -51,6 +51,18 @@ v4l2-ctl --list-devices
 
 然后将正确的编号传给 `--camera-id`。
 
+固定配置的三轮链路延时测试（从工程根目录执行）：
+
+```bash
+bash scripts/run_latency.sh
+```
+
+```bash
+# 每轮 1000 帧，前 100 帧预热；固定 6 线程、8 个 V4L2 buffer、RKNN fd 与 MPP copy
+# 脚本会新建 debug_records/latency_*，保存每轮 CSV、日志和完整性校验后的统计
+bash scripts/run_latency.sh
+```
+
 ## 文档导航
 
 | 文档 | 内容 |
@@ -118,7 +130,7 @@ v4l2-ctl --list-devices
 | DQBUF 成功后 → MPP 完整编码包取得后 | 2700 | 32.38 | 29.71 | 46.64 | 61.43 |
 | V4L2 驱动帧时间戳 → MPP 完整编码包取得后 | 2700 | 66.41 | 64.08 | 81.55 | 98.79 |
 
-> 测试条件：640×480 YUYV@30 FPS、8 个 V4L2 buffer、6 个推理线程、YOLOv5s ReLU INT8、DMA-BUF 采集、RKNN fd 输入 / copy 输出、MPP copy 输入。两种口径使用同一单调时钟基准，不含网络传输、接收端解码和显示；驱动帧时间戳不等同于已验证的曝光起点。数据来自 `ec21bfc` 基线加板端延时埋点、RGA 缓冲修复及采集背压修改的测试版本。
+> 测试条件：640×480 YUYV@30 FPS、8 个 V4L2 buffer、6 个推理线程、YOLOv5s ReLU INT8、DMA-BUF 采集、RKNN fd 输入 / copy 输出、MPP copy 输入。两种口径使用同一单调时钟基准，不含网络传输、接收端解码和显示；驱动帧时间戳不等同于已验证的曝光起点。数据来自 `ec21bfc` 基线加板端修改的历史测试版本；延时埋点、RGA 缓冲修复和采集背压现已整合进源码，目录调整后的新验证不覆盖这组历史结果。
 
 ### NEON 后处理优化
 
@@ -134,13 +146,22 @@ v4l2-ctl --list-devices
 
 ```text
 Desktop/
-├── main.cpp                 # 命令行和流水线编排
-├── camera_dmabuf.*          # V4L2 mmap / DMA-BUF Camera 采集
-├── frame_data.h             # 帧与 Camera buffer 生命周期
-├── yolov5s.*                # RGA、RKNN、后处理、画框
-├── thread_poll.*            # 多 context worker 线程池
-├── mpp.* / streamer.*       # H.264 编码和 RTMP 输出
-├── benchmark_stats.*        # 阶段统计和 CSV 输出
-├── docs/                    # 项目文档
-└── debug_records/           # 本地日志和 perf 数据，不提交
+├── Readme.md / CMakeLists.txt
+├── src/                     # 正式应用；入口 src/main.cpp
+│   ├── camera/              # V4L2 MMAP / DMA-BUF 采集
+│   ├── common/              # 队列、帧与 buffer 生命周期、日志开关
+│   ├── inference/           # RKNN、YOLO、worker 线程池
+│   ├── postprocess/         # 标量 / NEON 后处理
+│   ├── streaming/           # MPP、RTMP、streamer
+│   └── monitoring/          # 阶段统计、延时埋点、CPU/NPU 监控
+├── benchmarks/              # 独立后处理性能测试入口
+├── tools/                   # DMA/MPP 探针、精度评估、延时 CSV 校验
+├── scripts/                 # 启动与延时复现；archive/ 保存历史脚本
+├── experiments/             # 精度数据、结果、INT8 dump、历史实现
+├── model/                   # 模型与标签；保持原路径
+├── 3rdparty/                # 第三方依赖；保持原路径
+├── docs/                    # 文档与已发布的 latency_data/
+└── debug_records/           # 新实验的本地输出，不提交
 ```
+
+编译产物仍位于 `build/`，主程序仍为 `build/app`。程序默认模型等相对路径以 `build/` 为工作目录；`scripts/` 下的新启动脚本会自动进入该目录。诊断工具默认参与构建，可用 `-DBUILD_DIAGNOSTIC_TOOLS=OFF` 关闭。离线后处理样本已移到 `experiments/int8_dumps/`，历史脚本与历史报告保留当时的路径记载。

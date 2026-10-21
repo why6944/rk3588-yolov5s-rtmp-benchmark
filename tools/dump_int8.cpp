@@ -14,9 +14,18 @@ int main(int argc, char **argv)
     }
     const char *img_path = argv[1];
     const char *model_path = (argc >= 3) ? argv[2] : "../model/yolov5s.rknn";
+    if (setenv("RKNN_INT8_DUMP", "1", 1) != 0) {
+        perror("setenv RKNN_INT8_DUMP");
+        return 1;
+    }
+    set_post_process_mode(PostProcessMode::Scalar);
 
     printf("Loading model: %s\n", model_path);
     Yolov5s yolo(model_path, 0);
+    if (!yolo.isInitialized()) {
+        fprintf(stderr, "Failed to initialize model\n");
+        return 1;
+    }
     printf("Model input: %dx%dx%d\n", yolo.model_width, yolo.model_height, yolo.model_channel);
 
     cv::Mat img = cv::imread(img_path, cv::IMREAD_COLOR);

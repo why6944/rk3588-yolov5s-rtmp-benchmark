@@ -56,7 +56,7 @@ static bool pin_to_core(int core_id) {
 
 int main(int argc, char **argv) {
     const char *mode = "scalar";
-    const char *data_dir = "int8_dumps";
+    const char *data_dir = "../experiments/int8_dumps";
     int nframes = 30, warmup = 100, iterations = 1000, rounds = 5, core = 4;
     bool skip_sigmoid = false;
 

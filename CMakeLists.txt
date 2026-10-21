@@ -89,6 +89,12 @@ endif()
 
 # 将头文件路径添加到编译器的搜索路径。
 include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/camera
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/inference
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/postprocess
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/monitoring
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/streaming
     ${OpenCV_INCLUDE_DIRS}
     ${RKNN_INCLUDE_DIRS}
     ${RGA_INCLUDE_DIRS}
@@ -99,27 +105,34 @@ include_directories(
     ${OpenCL_INCLUDE_DIRS}
 )
 
-# 定义可执行目标
-add_executable(app 
-    main.cpp 
-    camera_dmabuf.cpp
-    thread_pool.cpp
-    yolov5s.cpp
-    post_process.cpp
-    post_process_neon_full.cpp
-    post_process_common.cpp
-    post_process_scalar.cpp
-    post_process_auto.cpp
-    post_process_neon.cpp
-    streamer.c
-    rtmp.c
-    mpp.c
-    perf_monitor.cpp
-    benchmark_stats.cpp
+set(POSTPROCESS_SOURCES
+    src/postprocess/post_process.cpp
+    src/postprocess/post_process_neon_full.cpp
+    src/postprocess/post_process_common.cpp
+    src/postprocess/post_process_scalar.cpp
+    src/postprocess/post_process_auto.cpp
+    src/postprocess/post_process_neon.cpp
+)
+
+# 复用推理/统计实现，工具与主程序使用相同的实现和编译参数。
+add_library(rknn_pipeline STATIC
+    src/inference/yolov5s.cpp
+    ${POSTPROCESS_SOURCES}
+    src/monitoring/perf_monitor.cpp
+    src/monitoring/benchmark_stats.cpp
+)
+
+add_executable(app
+    src/main.cpp
+    src/camera/camera_dmabuf.cpp
+    src/inference/thread_pool.cpp
+    src/streaming/streamer.c
+    src/streaming/rtmp.c
+    src/streaming/mpp.c
 )
 
 # 链接所有需要的库
-target_link_libraries(app 
+target_link_libraries(rknn_pipeline PUBLIC
     ${OpenCV_LIBS}
     ${RKNN_LIBS}
     ${RGA_LIBS}
@@ -133,6 +146,7 @@ target_link_libraries(app
     m
     dl
 )
+target_link_libraries(app rknn_pipeline)
 option(ENABLE_RTMP "Enable RTMP streaming" OFF)
 if(ENABLE_RTMP)
     target_compile_definitions(app PRIVATE ENABLE_RTMP=1)
@@ -144,24 +158,24 @@ endif()
 # Post-processing benchmark binary
 # ============================================================
 add_executable(benchmark_postprocess
-    benchmark_main.cpp
-    post_process_common.cpp
-    post_process_scalar.cpp
-    post_process_auto.cpp
-    post_process_neon.cpp
+    benchmarks/benchmark_main.cpp
+    src/postprocess/post_process_common.cpp
+    src/postprocess/post_process_scalar.cpp
+    src/postprocess/post_process_auto.cpp
+    src/postprocess/post_process_neon.cpp
 )
 
 # Per-file compiler flags for controlled experiment
-set_source_files_properties(post_process_scalar.cpp PROPERTIES
+set_source_files_properties(src/postprocess/post_process_scalar.cpp PROPERTIES
     COMPILE_FLAGS "-O2 -fno-tree-vectorize")
-set_source_files_properties(post_process_auto.cpp
-    post_process_neon.cpp PROPERTIES
+set_source_files_properties(src/postprocess/post_process_auto.cpp
+    src/postprocess/post_process_neon.cpp PROPERTIES
     COMPILE_FLAGS "-O3 -ftree-vectorize -fopt-info-vec-all")
-set_source_files_properties(post_process_neon.cpp PROPERTIES
+set_source_files_properties(src/postprocess/post_process_neon.cpp PROPERTIES
     COMPILE_FLAGS "-O2 -march=armv8-a+simd")
-set_source_files_properties(post_process_common.cpp PROPERTIES
+set_source_files_properties(src/postprocess/post_process_common.cpp PROPERTIES
     COMPILE_FLAGS "-O2")
-set_source_files_properties(post_process_neon_full.cpp PROPERTIES
+set_source_files_properties(src/postprocess/post_process_neon_full.cpp PROPERTIES
     COMPILE_FLAGS "-O2 -march=armv8-a+simd")
 
 target_link_libraries(benchmark_postprocess
@@ -169,4 +183,17 @@ target_link_libraries(benchmark_postprocess
 )
 
 
-add_executable(dump_int8 dump_int8.cpp yolov5s.cpp post_process.cpp post_process_neon_full.cpp perf_monitor.cpp benchmark_stats.cpp)
+option(BUILD_DIAGNOSTIC_TOOLS "Build DMA/MPP probes and model evaluation tools" ON)
+if(BUILD_DIAGNOSTIC_TOOLS)
+    add_executable(dump_int8 tools/dump_int8.cpp tools/tool_runtime.cpp)
+    target_link_libraries(dump_int8 rknn_pipeline)
+
+    add_executable(dma_probe tools/dma_probe.cpp)
+    target_link_libraries(dma_probe ${OpenCV_LIBS} ${RGA_LIBS})
+
+    add_executable(mpp_fd_probe tools/mpp_fd_probe.cpp)
+    target_link_libraries(mpp_fd_probe ${MPP_LIBRARY} ${RGA_LIBS})
+
+    add_executable(rknn_eval tools/rknn_eval.cpp)
+    target_link_libraries(rknn_eval ${OpenCV_LIBS} ${RKNN_LIBS})
+endif()

@@ -12,7 +12,7 @@
 | `--camera-width` / `--camera-height` | `640` / `480` | 申请的摄像头尺寸 |
 | `--camera-fps` | `30` | 申请的摄像头帧率 |
 | `--camera-format` | `YUYV`、`MJPG` | 申请的像素格式；直读 RGA 路径要求 YUYV |
-| `--threads` | `6` | `ThreadPoll` worker / RKNN context 数量 |
+| `--threads` | `6` | `ThreadPool` worker / RKNN context 数量 |
 | `--loops` | `600` | Camera 处理帧数；rknn-only 循环次数 |
 | `--box-threshold` | `0.6` | 置信度阈值 |
 | `--nms-threshold` | `0.5` | NMS IoU 阈值 |
@@ -22,6 +22,12 @@
 | `--rtmp-url` | `rtmp://host:1935/live/key` | RTMP 推流地址 |
 | `--snapshot-frame` | `120` | snapshot 模式导出帧号 |
 | `--snapshot-output` | `../debug_records/snapshot.png` | snapshot 文件路径 |
+| `--postprocess` | `scalar`、`neon` | 应用后处理实现 |
+| `--preprocess-backend` | `rga`、`cpu` | 默认 RGA；CPU 为 Mat 推理预处理对照，要求 RKNN copy 输入，不表示整条相机/编码链路无 RGA |
+| `--warmup` | `50` | 仅用于 rknn-only 预热 |
+| `--latency-csv` | `../debug_records/run1.csv` | 运行结束后写逐帧延时记录，正式有效起点要求直接 V4L2 采集 |
+| `--latency-warmup` | `100` | 延时统计排除前 N 个应用帧 |
+| `--latency-summary` | 无附加值 | 打印均值、P50/P90/P95/P99/最大值和阶段统计 |
 
 环境变量：
 
@@ -35,9 +41,10 @@ V4L2_BUFFER_COUNT=8
 
 ### `FrameData`
 
-定义于 `frame_data.h`，是读队列、线程池和写队列之间传递的一帧数据。它包含：
+定义于 `src/common/frame_data.h`，是读队列、线程池和写队列之间传递的一帧数据。它包含：
 
 - `index`：用于 future 聚合和按帧号保序；
+- `FrameLatencyTrace latency`：同一帧在不同处理位置的单调时钟读数；
 - `cv::Mat frame`：CPU 侧图像，供画框和 copy 路径使用；
 - `DmaBufFrameRef`：Camera fd、尺寸、格式、RGA handle、V4L2 buffer index 与 QBUF 回调；
 - `FrameStorageType`：区分 Mat、Camera mmap 与 Camera DMA-BUF 来源。
@@ -51,10 +58,11 @@ V4L2_BUFFER_COUNT=8
 | 模块 | 关键接口 | 职责 |
 | --- | --- | --- |
 | `CameraDmaBufCapture` | `open()`、`readFrameData()`、`close()` | V4L2 设置、mmap、DQBUF/QBUF、可选 fd 导出 |
-| `ThreadPoll` | `submit_task_async(FrameData)` | 将帧提交给 worker，并返回 `future<ProcessResult>` |
+| `ThreadPool` | `submit_task_async(FrameData)` | 将帧提交给 worker，并返回 `future<ProcessResult>` |
 | `Yolov5s` | `inference_frame()`、`inference_image()`、`draw_result()` | RGA 预处理、RKNN 推理、后处理与画框 |
 | `BenchmarkStats` | `record_inference()`、`append_csv()` | 汇总 FPS 与阶段耗时 |
 | `PerfMonitor` | `start()`、`stop()` | 采样 CPU/NPU 指标并写 CSV |
+| `LatencyCollector` | `configure()`、`record()`、`finalize()` | 按帧保存时间读数，预热过滤，输出 CSV 和延时分位数 |
 | `streamer` / `mpp` | `init_streamer()`、`process_image()`、`close_streamer()` | MPP 编码和可选 RTMP 封装 |
 
 ## 4. 常用运行示例
