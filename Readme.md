@@ -72,15 +72,6 @@ bash scripts/run_latency.sh
 | [测试报告](docs/测试报告_性能与验证.md) | 性能口径、吞吐、DMA-BUF 对比与限制 |
 | [模型替换与复现](docs/模型替换对比报告.md) | 旧模型与 ReLU INT8 模型对比、输出语义适配与复现方式 |
 
-<details>
-<summary>调试与历史材料</summary>
-
-- [SiLU vs ReLU A/B 实验附录](docs/appendix/SiLU_vs_ReLU_A_B实验.md)：模型延迟、算子融合与实验归因。
-- [perf 教学与调试附录](docs/debug/RK3588_perf性能分析教学调试文档.md)：安装、采样、报告解读和完整调试过程。
-- [早期代码问题讲解](docs/archive/代码问题深度讲解.md)：已修复问题的学习记录，不代表当前实现仍存在这些问题。
-
-</details>
-
 ## 性能摘要
 
 ### 模型推理 (纯 NPU, rknn-only)
