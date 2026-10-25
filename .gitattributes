@@ -1,2 +1,5 @@
 *.sh text eol=lf
 *.py text eol=lf
+
+# Preserve archived evaluator bytes for its recorded SHA-256.
+docs/quantization_per_class_20261025/eval_rknn_coco128_20261025.py -text
