@@ -1,0 +1,340 @@
+{
+  "hostname": "orangepi5pro",
+  "platform": "Linux-5.10.160-rockchip-rk3588-aarch64-with-glibc2.29",
+  "warmup_per_process": 30,
+  "samples_per_process": 30,
+  "context_count": 1,
+  "core_mask": 1,
+  "collect_perf": true,
+  "models": {
+    "silu": {
+      "path": "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s.rknn",
+      "sha256": "9619248441d1b2008b55b1f74ef720159f558df8b945d01400a1c12ea192b90d",
+      "bytes": 9781761
+    },
+    "relu": {
+      "path": "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s_relu_INT8_Normal.rknn",
+      "sha256": "6dc67c3c5fd1e18e6e80d24ab6c91606c22c80b818790f3c2089c96c6b56535b",
+      "bytes": 8383159
+    }
+  },
+  "image": {
+    "path": "/home/orangepi/person.jpg",
+    "sha256": "3a13214d839a90fc5dd1f0370faba083b419688489b2ee55dd77d4e19f58ebf4"
+  },
+  "runtime": {
+    "path": "/home/orangepi/streamer_codev5.0/Desktop/3rdparty/librknn_api/aarch64/librknnrt.so",
+    "sha256": "4fe913fe0b66d9456221932239e4fd3e41223374a35fe1553d3301407410f68c"
+  },
+  "frequency_policy": "unchanged; read-only sysfs snapshots at process boundaries",
+  "started": {
+    "utc": "2026-08-01T04:00:17.471460+00:00",
+    "sysfs": {
+      "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+      "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+      "/sys/class/devfreq/dmc/cur_freq": "534000000",
+      "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+      "/sys/class/thermal/thermal_zone2/temp": "35153",
+      "/sys/class/thermal/thermal_zone0/temp": "35153",
+      "/sys/class/thermal/thermal_zone5/temp": "33307",
+      "/sys/class/thermal/thermal_zone3/temp": "35153",
+      "/sys/class/thermal/thermal_zone1/temp": "34230",
+      "/sys/class/thermal/thermal_zone6/temp": "34230",
+      "/sys/class/thermal/thermal_zone4/temp": "34230"
+    }
+  },
+  "runs": [
+    {
+      "model": "silu",
+      "round": 0,
+      "command": [
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/rknn_layer_perf",
+        "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s.rknn",
+        "/home/orangepi/person.jpg",
+        "30",
+        "30",
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/silu_round0",
+        "1"
+      ],
+      "before": {
+        "utc": "2026-08-01T04:00:17.472774+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "33307",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "34230",
+          "/sys/class/thermal/thermal_zone6/temp": "34230",
+          "/sys/class/thermal/thermal_zone4/temp": "34230"
+        }
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-08-01T04:00:20.232117+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "34230",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "34230"
+        }
+      }
+    },
+    {
+      "model": "relu",
+      "round": 0,
+      "command": [
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/rknn_layer_perf",
+        "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s_relu_INT8_Normal.rknn",
+        "/home/orangepi/person.jpg",
+        "30",
+        "30",
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/relu_round0",
+        "1"
+      ],
+      "before": {
+        "utc": "2026-08-01T04:00:20.251350+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "34230",
+          "/sys/class/thermal/thermal_zone5/temp": "34230",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "34230",
+          "/sys/class/thermal/thermal_zone6/temp": "34230",
+          "/sys/class/thermal/thermal_zone4/temp": "34230"
+        }
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-08-01T04:00:22.628586+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      }
+    },
+    {
+      "model": "relu",
+      "round": 1,
+      "command": [
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/rknn_layer_perf",
+        "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s_relu_INT8_Normal.rknn",
+        "/home/orangepi/person.jpg",
+        "30",
+        "30",
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/relu_round1",
+        "1"
+      ],
+      "before": {
+        "utc": "2026-08-01T04:00:22.649779+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "34230",
+          "/sys/class/thermal/thermal_zone4/temp": "34230"
+        }
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-08-01T04:00:24.974109+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      }
+    },
+    {
+      "model": "silu",
+      "round": 1,
+      "command": [
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/rknn_layer_perf",
+        "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s.rknn",
+        "/home/orangepi/person.jpg",
+        "30",
+        "30",
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/silu_round1",
+        "1"
+      ],
+      "before": {
+        "utc": "2026-08-01T04:00:24.997123+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-08-01T04:00:27.885746+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "36076",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      }
+    },
+    {
+      "model": "silu",
+      "round": 2,
+      "command": [
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/rknn_layer_perf",
+        "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s.rknn",
+        "/home/orangepi/person.jpg",
+        "30",
+        "30",
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/silu_round2",
+        "1"
+      ],
+      "before": {
+        "utc": "2026-08-01T04:00:27.909706+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-08-01T04:00:30.803936+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      }
+    },
+    {
+      "model": "relu",
+      "round": 2,
+      "command": [
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/rknn_layer_perf",
+        "/home/orangepi/streamer_codev5.0/Desktop/model/yolov5s_relu_INT8_Normal.rknn",
+        "/home/orangepi/person.jpg",
+        "30",
+        "30",
+        "/home/orangepi/streamer_codev5.0/Desktop/experiments/activation_perf_20261023/relu_round2",
+        "1"
+      ],
+      "before": {
+        "utc": "2026-08-01T04:00:30.828532+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "35153",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "35153",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      },
+      "exit_code": 0,
+      "after": {
+        "utc": "2026-08-01T04:00:33.210599+00:00",
+        "sysfs": {
+          "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+          "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+          "/sys/class/devfreq/dmc/cur_freq": "534000000",
+          "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+          "/sys/class/thermal/thermal_zone2/temp": "35153",
+          "/sys/class/thermal/thermal_zone0/temp": "35153",
+          "/sys/class/thermal/thermal_zone5/temp": "35153",
+          "/sys/class/thermal/thermal_zone3/temp": "36076",
+          "/sys/class/thermal/thermal_zone1/temp": "35153",
+          "/sys/class/thermal/thermal_zone6/temp": "36076",
+          "/sys/class/thermal/thermal_zone4/temp": "35153"
+        }
+      }
+    }
+  ],
+  "finished": {
+    "utc": "2026-08-01T04:00:33.237675+00:00",
+    "sysfs": {
+      "/sys/class/devfreq/fdab0000.npu/cur_freq": "1000000000",
+      "/sys/class/devfreq/fdab0000.npu/governor": "rknpu_ondemand",
+      "/sys/class/devfreq/dmc/cur_freq": "534000000",
+      "/sys/class/devfreq/dmc/governor": "dmc_ondemand",
+      "/sys/class/thermal/thermal_zone2/temp": "35153",
+      "/sys/class/thermal/thermal_zone0/temp": "36076",
+      "/sys/class/thermal/thermal_zone5/temp": "35153",
+      "/sys/class/thermal/thermal_zone3/temp": "36076",
+      "/sys/class/thermal/thermal_zone1/temp": "35153",
+      "/sys/class/thermal/thermal_zone6/temp": "35153",
+      "/sys/class/thermal/thermal_zone4/temp": "35153"
+    }
+  }
+}

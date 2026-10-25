@@ -90,6 +90,23 @@ bash scripts/run_latency.sh
 
 编译图观察到 ConvReLU 融合节点, 结合板端 A/B 结果判断性能提升与 ReLU 算子融合及模型图结构差异相关; 各因素贡献仍需结合 RKNPU 性能分析进一步量化。
 
+### 算子融合与耗时热点分析
+
+通过 RKNN 逐层性能报告，对比两份部署模型的融合执行层。SiLU 版本包含 57 个 `ConvExSwish`；ReLU 版本包含 50 个 `ConvRelu`、7 个 `ConvReluAdd` 和 3 个 `ConvSigmoid`。两版均已发生算子融合，差别不是“SiLU 未融合、ReLU 才融合”。
+
+| 热点位置 | 实测中位耗时 | 耗时占比 |
+| --- | ---: | ---: |
+| SiLU 首个 ConvExSwish | 4.074 ms | 13.78% |
+| ReLU 首部 Conv + ConvRelu | 合计 2.177 ms | 9.42% |
+| ReLU 80×80 检测头 ConvSigmoid | 0.966 ms | 4.18% |
+| ReLU 全部 13 个 Concat | 合计 3.602 ms | 15.58% |
+
+SiLU 的最大单层热点集中在首部融合算子；ReLU 的热点更分散，主要涉及首部卷积、高分辨率特征拼接和检测头，且总耗时降低。两版 Concat 合计耗时接近，ReLU 中其占比上升主要是总耗时下降，并不代表 Concat 变慢。
+
+> 本节测试条件：Runtime 1.5.3b6，单 context、NPU core 0、batch=1、640×640 输入，开启性能采集，每模型采样 90 次。单层时间为样本中位数，分组时间为各层中位数之和；占比按全部执行层中位数之和计算。本节与上表 Runtime 2.3.2 的延迟测试分开统计，不直接混算。
+
+详见 [YOLOv5 双模型算子融合与耗时分析](docs/YOLOv5双模型算子融合与耗时分析.md)。
+
 ### 线程扩展性 (ReLU INT8-Normal, rknn-only)
 
 | 线程数 | FPS | rknn_avg | Core0 | Core1 | Core2 | 说明 |
