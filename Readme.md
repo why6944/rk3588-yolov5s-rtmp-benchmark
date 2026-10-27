@@ -2,6 +2,30 @@
 
 基于 Orange Pi 5 Pro / RK3588 的边缘侧视频流分析项目。系统支持视频文件或 USB 摄像头输入，使用 RGA 完成预处理、RKNN Runtime 在三核 NPU 上执行 YOLOv5s INT8 推理，并通过瑞芯微 MPP 进行 H.264 硬编码与 RTMP 推流。
 
+## 目录
+
+```text
+Desktop/
+├── Readme.md / CMakeLists.txt
+├── src/                     # 正式应用；入口 src/main.cpp
+│   ├── camera/              # V4L2 MMAP / DMA-BUF 采集
+│   ├── common/              # 队列、帧与 buffer 生命周期、日志开关
+│   ├── inference/           # RKNN、YOLO、worker 线程池
+│   ├── postprocess/         # 标量 / NEON 后处理
+│   ├── streaming/           # MPP、RTMP、streamer
+│   └── monitoring/          # 阶段统计、延时埋点、CPU/NPU 监控
+├── benchmarks/              # 独立后处理性能测试入口
+├── tools/                   # DMA/MPP 探针、精度评估、延时 CSV 校验
+├── scripts/                 # 启动与延时复现；archive/ 保存历史脚本
+├── experiments/             # 精度数据、结果、INT8 dump、历史实现
+├── model/                   # 模型与标签；保持原路径
+├── 3rdparty/                # 第三方依赖；保持原路径
+├── docs/                    # 文档与已发布的 latency_data/
+└── debug_records/           # 新实验的本地输出，不提交
+```
+
+编译产物仍位于 `build/`，主程序仍为 `build/app`。程序默认模型等相对路径以 `build/` 为工作目录；`scripts/` 下的新启动脚本会自动进入该目录。诊断工具默认参与构建，可用 `-DBUILD_DIAGNOSTIC_TOOLS=OFF` 关闭。离线后处理样本已移到 `experiments/int8_dumps/`，历史脚本与历史报告保留当时的路径记载。
+
 ## 项目能力
 
 - 视频文件与 V4L2 USB Camera 输入；
@@ -166,30 +190,6 @@ SiLU 的最大单层热点集中在首部融合算子；ReLU 的热点更分散�
 基于 RGA 完成 YUYV/RGB/NV12 转换, 使用瑞芯微 MPP 进行 H.264 硬编码, 并支持将检测后视频通过 RTMP 推送。
 
 详细测试环境、采样口径和历史对比见 [测试报告](docs/测试报告_性能与验证.md)。
-
-## 目录
-
-```text
-Desktop/
-├── Readme.md / CMakeLists.txt
-├── src/                     # 正式应用；入口 src/main.cpp
-│   ├── camera/              # V4L2 MMAP / DMA-BUF 采集
-│   ├── common/              # 队列、帧与 buffer 生命周期、日志开关
-│   ├── inference/           # RKNN、YOLO、worker 线程池
-│   ├── postprocess/         # 标量 / NEON 后处理
-│   ├── streaming/           # MPP、RTMP、streamer
-│   └── monitoring/          # 阶段统计、延时埋点、CPU/NPU 监控
-├── benchmarks/              # 独立后处理性能测试入口
-├── tools/                   # DMA/MPP 探针、精度评估、延时 CSV 校验
-├── scripts/                 # 启动与延时复现；archive/ 保存历史脚本
-├── experiments/             # 精度数据、结果、INT8 dump、历史实现
-├── model/                   # 模型与标签；保持原路径
-├── 3rdparty/                # 第三方依赖；保持原路径
-├── docs/                    # 文档与已发布的 latency_data/
-└── debug_records/           # 新实验的本地输出，不提交
-```
-
-编译产物仍位于 `build/`，主程序仍为 `build/app`。程序默认模型等相对路径以 `build/` 为工作目录；`scripts/` 下的新启动脚本会自动进入该目录。诊断工具默认参与构建，可用 `-DBUILD_DIAGNOSTIC_TOOLS=OFF` 关闭。离线后处理样本已移到 `experiments/int8_dumps/`，历史脚本与历史报告保留当时的路径记载。
 
 ## ReLU 模型量化精度
 
